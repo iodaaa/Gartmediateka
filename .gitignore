@@ -83,3 +83,6 @@ next-env.d.ts
 # Deployment tooling
 .vercel/
 
+# Browser test artifacts
+test-results/
+playwright-report/
