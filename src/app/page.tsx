@@ -1,4 +1,4 @@
-import MediaWorkspace from "@/components/media-workspace";
+import MediaWorkspace from "@/components/real-workspace";
 export default function Page() {
   return <MediaWorkspace />;
 }

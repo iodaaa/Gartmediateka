@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Folder {
+  id          String       @id @default(uuid())
+  name        String
+  parentId    String?
+  parent      Folder?      @relation("FolderTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Folder[]     @relation("FolderTree")
+  storagePath String       @unique
+  pathKey     String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  assets      MediaAsset[]
+
+  @@index([parentId])
+}
+
+model MediaSet {
+  id          String       @id @default(uuid())
+  mediaSetId  String       @unique
+  name        String
+  type        String
+  projectId   String?
+  description String?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  assets      MediaAsset[]
+}
+
+model MediaAsset {
+  id               String       @id @default(uuid())
+  mediaId          String       @unique
+  originalFilename String
+  storedFilename   String
+  extension        String
+  mimeType         String
+  fileSize         BigInt
+  checksumSha256   String
+  storagePath      String       @unique
+  pathKey          String       @unique
+  folderId         String
+  folder           Folder       @relation(fields: [folderId], references: [id], onDelete: Restrict)
+  mediaSetId       String?
+  mediaSet         MediaSet?    @relation(fields: [mediaSetId], references: [id], onDelete: Restrict)
+  ingestBatchId    String?
+  ingestBatch      IngestBatch? @relation(fields: [ingestBatchId], references: [id], onDelete: Restrict)
+  sourceType       String       @default("UNKNOWN")
+  fileRole         String       @default("ORIGINAL")
+  width            Int
+  height           Int
+  thumbnailPath    String
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([folderId, createdAt])
+  @@index([checksumSha256])
+  @@index([ingestBatchId])
+}
+
+model IngestBatch {
+  id        String       @id @default(uuid())
+  createdAt DateTime     @default(now())
+  status    String
+  fileCount Int
+  assets    MediaAsset[]
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  action     String
+  entityType String
+  entityId   String
+  details    String
+  createdAt  DateTime @default(now())
+
+  @@index([action, createdAt])
+}

@@ -1,0 +1,275 @@
+/* Real data surfaces retain the approved UI v0.1 palette, layout and spacing. */
+.real-media-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  background: #edf1f0;
+}
+.preview-modal .real-media-image {
+  height: auto;
+  max-height: 72vh;
+  object-fit: contain;
+  border-radius: 8px;
+}
+.local-avatar {
+  display: grid;
+  place-items: center;
+}
+.real-folder-tree {
+  padding-bottom: 20px;
+}
+.real-tree-row {
+  display: flex;
+  align-items: center;
+  min-height: 37px;
+  border-radius: 7px;
+}
+.real-tree-row.active {
+  background: var(--green-soft);
+  color: var(--green);
+}
+.tree-expander {
+  width: 23px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  height: 34px;
+}
+.tree-expander span {
+  width: 14px;
+}
+.real-tree-select {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  text-align: left;
+  flex: 1;
+  padding: 7px 8px 7px 0;
+  font-size: 14px;
+}
+.real-tree-select > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.real-tree-select small {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.real-tree-select .gold-folder {
+  fill: #ffc94f;
+  color: #f7bb3f;
+}
+.real-tree-row.active .real-tree-select > svg {
+  fill: var(--green);
+  color: var(--green);
+}
+.real-breadcrumbs {
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.breadcrumb-part {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-shrink: 0;
+}
+.real-breadcrumbs button[aria-current="page"] {
+  font-weight: 600;
+  color: var(--ink);
+}
+.real-breadcrumbs > svg:first-child {
+  display: block !important;
+}
+.scan-button {
+  margin-left: auto;
+  min-height: 35px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+.asset-date {
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.3;
+}
+.real-app .asset-caption {
+  gap: 5px;
+}
+.real-app .list-view .asset-date {
+  font-size: 11px;
+}
+.status-banner,
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 24px 14px;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.status-banner {
+  background: #eaf2ed;
+  color: var(--green);
+}
+.error-banner {
+  background: #fff0ed;
+  color: #913c2c;
+  flex-wrap: wrap;
+}
+.modal > .error-banner {
+  margin: 16px 0 0;
+}
+.properties-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  height: 100%;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.pagination {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pagination button {
+  padding: 0 8px;
+  font-size: 16px;
+}
+.real-app .workspace {
+  position: relative;
+}
+.drop-overlay {
+  position: absolute;
+  inset: 12px;
+  z-index: 20;
+  background: #f1f8f5f5;
+  border: 2px dashed var(--green);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  color: var(--green);
+  pointer-events: none;
+}
+.image-unavailable {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+  background: #eef2f0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.file-input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.upload-picker {
+  width: 100%;
+  background: transparent;
+}
+.field-label select {
+  padding: 10px;
+  border: 1px solid #cdd8d3;
+  background: #fff;
+  color: var(--ink);
+  border-radius: 7px;
+}
+.pending-files,
+.upload-results,
+.scan-warnings {
+  max-height: 280px;
+  overflow: auto;
+  padding-left: 20px;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.upload-results {
+  padding: 0;
+  list-style: none;
+}
+.upload-results li {
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin: 10px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.upload-results .duplicate {
+  background: #fff8e9;
+}
+.upload-results .imported {
+  background: #edf6ef;
+}
+.upload-results .error {
+  background: #fff0ed;
+}
+.upload-results small {
+  color: var(--muted);
+}
+.spinning {
+  animation: spin 1.5s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (min-width: 1700px) {
+  .real-app .thumbnail {
+    height: clamp(130px, calc((100dvh - 600px) / 3), 245px);
+  }
+}
+@media (max-width: 760px) {
+  .real-app .filter-bar {
+    gap: 7px;
+  }
+  .real-app .scan-button {
+    margin-left: 0;
+  }
+  .real-breadcrumbs {
+    max-width: calc(100% - 135px);
+  }
+  .real-app .workspace-toolbar {
+    gap: 5px;
+  }
+  .real-app .status-banner,
+  .real-app .error-banner {
+    margin-left: 16px;
+    margin-right: 16px;
+  }
+  .real-app .asset-date {
+    font-size: 11px;
+  }
+  .real-app .storage {
+    margin-top: auto;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .spinning {
+    animation: none;
+  }
+}

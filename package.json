@@ -1,26 +1,46 @@
 {
   "name": "gart-media",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
+  "overrides": {
+    "@prisma/config": {
+      "deepmerge-ts": "8.0.0"
+    }
+  },
   "scripts": {
-    "dev": "next dev --hostname 127.0.0.1",
-    "build": "next build",
-    "start": "next start --hostname 127.0.0.1",
+    "dev": "tsx scripts/bootstrap.ts && next dev --hostname 127.0.0.1",
+    "build": "prisma generate && next build",
+    "start": "tsx scripts/bootstrap.ts && next start --hostname 127.0.0.1",
+    "db:setup": "tsx scripts/bootstrap.ts",
+    "scan": "tsx scripts/scan.ts",
+    "lint": "eslint src scripts tests eslint.config.mjs playwright.config.ts",
+    "test": "tsx --test tests/backend.test.ts",
     "typecheck": "tsc --noEmit",
-    "test:ui": "playwright test"
+    "test:ui": "npm run build && tsx scripts/test-ui.ts"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "busboy": "^1.6.0",
+    "dotenv": "^17.4.2",
     "lucide-react": "^0.577.0",
     "next": "16.3.4",
+    "prisma": "^6.19.3",
+    "proper-lockfile": "^4.1.2",
     "react": "19.2.8",
-    "react-dom": "19.2.8"
+    "react-dom": "19.2.8",
+    "sharp": "^0.35.4"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
+    "@types/busboy": "^1.5.4",
     "@types/node": "^24.0.0",
+    "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "eslint": "^9.39.5",
+    "eslint-config-next": "^16.3.4",
     "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
     "typescript": "^5.9.3"
   }
 }
