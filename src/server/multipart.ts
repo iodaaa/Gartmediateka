@@ -19,7 +19,7 @@ export async function readUpload(request: Request) {
       parts: 23,
     },
   });
-  const files: { name: string; bytes: Buffer }[] = [];
+  const files: { name: string; bytes: Buffer; error?: string }[] = [];
   const fields: Record<string, string> = {};
   let problem = "";
   parser.on("field", (name, value, info) => {
@@ -28,13 +28,18 @@ export async function readUpload(request: Request) {
   });
   parser.on("file", (field, stream, info) => {
     const chunks: Buffer[] = [];
+    let fileError: string | undefined;
     if (field !== "files") problem = "Неизвестное поле файла";
     stream.on("limit", () => {
-      problem = "Максимальный размер изображения — 50 МБ";
+      fileError = "Максимальный размер изображения — 50 МБ";
     });
     stream.on("data", (chunk) => chunks.push(chunk));
     stream.on("end", () =>
-      files.push({ name: info.filename, bytes: Buffer.concat(chunks) }),
+      files.push({
+        name: info.filename,
+        bytes: fileError ? Buffer.alloc(0) : Buffer.concat(chunks),
+        error: fileError,
+      }),
     );
   });
   parser.on("filesLimit", () => {

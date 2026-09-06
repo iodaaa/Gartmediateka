@@ -1,6 +1,6 @@
 {
   "name": "gart-media",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "overrides": {
     "@prisma/config": {
@@ -28,7 +28,8 @@
     "proper-lockfile": "^4.1.2",
     "react": "19.2.8",
     "react-dom": "19.2.8",
-    "sharp": "^0.35.4"
+    "sharp": "^0.35.4",
+    "yazl": "^3.3.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
@@ -37,10 +38,13 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/yauzl": "^3.4.0",
+    "@types/yazl": "^3.3.1",
     "eslint": "^9.39.5",
     "eslint-config-next": "^16.3.4",
     "prettier": "^3.9.6",
     "tsx": "^4.23.13",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "yauzl": "^3.4.0"
   }
 }

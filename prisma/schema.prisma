@@ -19,6 +19,10 @@ model Folder {
   updatedAt   DateTime     @updatedAt
   assets      MediaAsset[]
 
+  trashId String?
+  project Project?
+
+  @@index([trashId])
   @@index([parentId])
 }
 
@@ -28,6 +32,7 @@ model MediaSet {
   name        String
   type        String
   projectId   String?
+  project     Project?     @relation(fields: [projectId], references: [id], onDelete: Restrict)
   description String?
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
@@ -56,12 +61,44 @@ model MediaAsset {
   width            Int
   height           Int
   thumbnailPath    String
+  trashId          String?
   createdAt        DateTime     @default(now())
   updatedAt        DateTime     @updatedAt
 
   @@index([folderId, createdAt])
   @@index([checksumSha256])
   @@index([ingestBatchId])
+  @@index([trashId])
+}
+
+model TrashEntry {
+  id               String    @id @default(uuid())
+  entityType       String
+  entityId         String
+  name             String
+  originalPath     String
+  originalParentId String
+  storagePath      String
+  fileCount        Int
+  folderCount      Int
+  createdAt        DateTime  @default(now())
+  restoredAt       DateTime?
+
+  @@index([restoredAt, createdAt])
+}
+
+model Project {
+  id          String     @id @default(uuid())
+  projectId   String     @unique
+  name        String
+  year        Int
+  description String?
+  templateId  String
+  folderId    String     @unique
+  folder      Folder     @relation(fields: [folderId], references: [id], onDelete: Restrict)
+  mediaSets   MediaSet[]
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
 }
 
 model IngestBatch {

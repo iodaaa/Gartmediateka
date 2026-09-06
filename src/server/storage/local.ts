@@ -53,7 +53,12 @@ export class LocalStorageProvider implements StorageProvider {
       }
     }
   }
-  private async safe(relative: string, root = this.root) {
+  private async safe(relative: string, root = this.root): Promise<string> {
+    if (relative.startsWith("trash:")) {
+      if (!/^trash:[a-f0-9-]+\/payload(?:\/|$)/.test(relative))
+        throw new Error("Некорректный путь корзины");
+      return this.safe("trash/" + relative.slice(6), this.state);
+    }
     if (
       relative.includes("\\") ||
       relative.includes(":") ||
@@ -82,7 +87,7 @@ export class LocalStorageProvider implements StorageProvider {
     }
     if ((await fs.readFile(marker, "utf8")) !== expected)
       throw new Error("Служебная база привязана к другому хранилищу");
-    for (const name of ["staging", "thumbnails"]) {
+    for (const name of ["staging", "thumbnails", "trash"]) {
       const dir = await this.safe(name, this.state);
       await fs.mkdir(dir, { recursive: true });
     }
@@ -147,6 +152,37 @@ export class LocalStorageProvider implements StorageProvider {
     validName(path.posix.basename(relative));
     if (!relative) throw new Error("Корневая папка уже существует");
     await fs.mkdir(await this.safe(relative)); // EEXIST is an error; never adopts an existing destination.
+  }
+  async openRead(relative: string) {
+    const handle = await fs.open(await this.safe(relative), "r");
+    try {
+      if (!(await handle.stat()).isFile())
+        throw new Error("Ожидается обычный файл");
+      return handle.createReadStream({ autoClose: true });
+    } catch (error) {
+      await handle.close();
+      throw error;
+    }
+  }
+  async move(from: string, to: string) {
+    if (!from || !to || from === to)
+      throw new Error("Недопустимое перемещение");
+    const source = await this.safe(from),
+      target = await this.safe(to);
+    if (await this.exists(to))
+      throw new Error("Конфликт: путь уже занят, данные не перезаписаны");
+    if (/^trash:[a-f0-9-]+\/payload$/.test(to)) {
+      await fs.mkdir(path.dirname(target));
+    }
+    // Exclusive hard-link publication protects files even if an external writer races the check.
+    // Removing the old directory entry is a move: the identical original remains at target.
+    if ((await fs.lstat(source)).isFile()) {
+      await fs.link(source, target);
+      await fs.unlink(source);
+    } else {
+      // Local Windows directory rename refuses existing destination directories.
+      await fs.rename(source, target);
+    }
   }
   async renameFolder(from: string, to: string) {
     if (!from || !to || path.posix.dirname(from) !== path.posix.dirname(to))

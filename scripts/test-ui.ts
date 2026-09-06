@@ -16,6 +16,9 @@ async function main() {
     "#af815d",
     "#7b8299",
     "#c5687c",
+    "#224466",
+    "#886622",
+    "#338844",
   ].entries()) {
     const bytes = await sharp({
       create: { width: 320, height: 220, channels: 3, background: color },
@@ -76,10 +79,10 @@ async function main() {
       } catch {}
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    if (!response || response.indexed !== 4)
+    if (!response || response.indexed !== 7)
       throw new Error("Каталог не сохранился после перезапуска приложения");
     console.log(
-      "Application restart: 4 real images retained in SQLite. Test data:",
+      "Application restart: 7 real images retained in SQLite. Test data:",
       base,
     );
   } finally {

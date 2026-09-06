@@ -13,6 +13,7 @@ export function localRequest(request: Request) {
 }
 export async function jsonBody(
   request: Request,
+  maxSize = 8192,
 ): Promise<Record<string, unknown>> {
   if (!request.headers.get("content-type")?.startsWith("application/json"))
     throw new Error("Ожидается JSON");
@@ -24,7 +25,7 @@ export async function jsonBody(
     const chunk = await reader.read();
     if (chunk.done) break;
     size += chunk.value.length;
-    if (size > 8192) {
+    if (size > maxSize) {
       await reader.cancel();
       throw new Error("Слишком большой запрос");
     }

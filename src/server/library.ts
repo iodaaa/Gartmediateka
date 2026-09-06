@@ -6,6 +6,7 @@ import { LocalStorageProvider, pathKey, validName } from "./storage/local";
 import type { StorageProvider } from "./storage/provider";
 import { extensions, inspectImage, checksum } from "./image";
 import type { UploadResult } from "../lib/api-types";
+import { recoverMutations } from "./mutations";
 
 type AssetInput = Omit<Prisma.MediaAssetUncheckedCreateInput, "fileSize"> & {
   fileSize: number;
@@ -55,14 +56,16 @@ export class LibraryService {
     tx: Prisma.TransactionClient,
     op: Extract<Journal, { kind: "rename" }>,
   ) {
-    const descendants = (await tx.folder.findMany()).filter(
+    const descendants = (
+      await tx.folder.findMany({ where: { trashId: null } })
+    ).filter(
       (f) =>
         f.storagePath === op.source ||
         f.storagePath.startsWith(op.source + "/"),
     );
     const ids = descendants.map((f) => f.id);
     const assets = await tx.mediaAsset.findMany({
-      where: { folderId: { in: ids } },
+      where: { folderId: { in: ids }, trashId: null },
     });
     for (const asset of assets) {
       const target = op.target + asset.storagePath.slice(op.source.length);
@@ -121,6 +124,7 @@ export class LibraryService {
   }
   // Called under an interprocess lock before reads and writes. Never guesses or deletes.
   private async recover() {
+    await recoverMutations(this.db, this.storage);
     const pending = await this.db.auditLog.findMany({
       where: { action: "OPERATION_PENDING" },
       orderBy: { createdAt: "asc" },
@@ -164,7 +168,7 @@ export class LibraryService {
       data: { status: "INTERRUPTED" },
     });
   }
-  private async locked<T>(work: () => Promise<T>) {
+  async locked<T>(work: () => Promise<T>) {
     await this.storage.initialize();
     return this.storage.withLock(async () => {
       await this.recover();
@@ -270,7 +274,10 @@ export class LibraryService {
   async list(folderId: string | null, query = "", page = 1, sort = "name") {
     return this.locked(async () => {
       const folders = await this.db.folder.findMany({
-        include: { _count: { select: { assets: true } } },
+        where: { trashId: null },
+        include: {
+          _count: { select: { assets: { where: { trashId: null } } } },
+        },
         orderBy: { name: "asc" },
       });
       const root = folders.find((f) => f.parentId === null);
@@ -278,6 +285,7 @@ export class LibraryService {
       if (target && !folders.some((f) => f.id === target))
         throw new Error("Папка не найдена");
       const where = {
+        trashId: null,
         folderId: target || "__unscanned__",
         ...(query ? { originalFilename: { contains: query } } : {}),
       };
@@ -292,7 +300,7 @@ export class LibraryService {
               : [{ originalFilename: "asc" }, { id: "asc" }],
         }),
         this.db.mediaAsset.count({ where }),
-        this.db.mediaAsset.count(),
+        this.db.mediaAsset.count({ where: { trashId: null } }),
         this.storage.capacity(),
       ]);
       return {
@@ -313,7 +321,7 @@ export class LibraryService {
     validName(name);
     return this.locked(async () => {
       const parent = await this.db.folder.findUniqueOrThrow({
-        where: { id: parentId },
+        where: { id: parentId, trashId: null },
       });
       const target = parent.storagePath
         ? parent.storagePath + "/" + name
@@ -349,7 +357,7 @@ export class LibraryService {
     validName(name);
     return this.locked(async () => {
       const folder = await this.db.folder.findUniqueOrThrow({
-        where: { id: folderId },
+        where: { id: folderId, trashId: null },
       });
       if (!folder.parentId || !folder.storagePath)
         throw new Error("Нельзя переименовать корень хранилища");
@@ -396,7 +404,7 @@ export class LibraryService {
   }
   async ingest(
     folderId: string,
-    files: { name: string; bytes: Buffer }[],
+    files: { name: string; bytes: Buffer; error?: string }[],
     sourceType: string,
   ) {
     if (
@@ -407,7 +415,7 @@ export class LibraryService {
       throw new Error("Некорректный источник");
     return this.locked(async () => {
       const folder = await this.db.folder.findUniqueOrThrow({
-        where: { id: folderId },
+        where: { id: folderId, trashId: null },
       });
       if (!(await this.storage.exists(folder.storagePath)))
         throw new Error("Физическая папка отсутствует");
@@ -422,6 +430,7 @@ export class LibraryService {
       for (const file of files) {
         let journalId: string | undefined;
         try {
+          if (file.error) throw new Error(file.error);
           validName(file.name);
           const info = await inspectImage(file.bytes, file.name);
           const duplicate = await this.db.mediaAsset.findFirst({
@@ -432,7 +441,9 @@ export class LibraryService {
               filename: file.name,
               status: "duplicate",
               assetId: duplicate.id,
-              storagePath: duplicate.storagePath,
+              storagePath: duplicate.trashId
+                ? "Корзина: " + duplicate.originalFilename
+                : duplicate.storagePath,
             });
             await this.audit("DUPLICATE_SKIPPED", "IngestBatch", batch.id, {
               filename: file.name,
@@ -537,7 +548,7 @@ export class LibraryService {
   async content(id: string, thumbnail: boolean) {
     return this.locked(async () => {
       const asset = await this.db.mediaAsset.findUniqueOrThrow({
-        where: { id },
+        where: { id, trashId: null },
       });
       const bytes = thumbnail
         ? await this.storage.readThumbnail(asset.thumbnailPath)

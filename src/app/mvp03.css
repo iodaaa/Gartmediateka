@@ -1,0 +1,93 @@
+.folder-actions,
+.selection-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  padding: 8px 28px;
+}
+.folder-actions .button,
+.selection-actions .button {
+  padding: 7px 10px;
+  font-size: 12px;
+  min-height: 32px;
+}
+.selection-actions {
+  background: #edf5f0;
+  border-block: 1px solid #d8e8df;
+}
+.selection-actions strong {
+  font-size: 13px;
+  color: #205b42;
+}
+.asset-card {
+  position: relative;
+  cursor: pointer;
+  text-align: left;
+  user-select: none;
+}
+.asset-checkbox {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 19px;
+  height: 19px;
+  accent-color: #216b4d;
+  cursor: pointer;
+  z-index: 2;
+  opacity: 0.75;
+}
+.asset-checkbox:checked,
+.asset-card:hover .asset-checkbox {
+  opacity: 1;
+}
+.trash-list {
+  padding: 20px 28px;
+}
+.trash-list article {
+  display: flex;
+  justify-content: space-between;
+  gap: 15px;
+  align-items: center;
+  padding: 18px 0;
+  border-bottom: 1px solid #e3e9e6;
+}
+.trash-list p {
+  overflow-wrap: anywhere;
+  color: #657269;
+  font-size: 13px;
+}
+.trash-list small {
+  color: #657269;
+}
+.field-label textarea {
+  font: inherit;
+  padding: 10px;
+  border: 1px solid #d6dfda;
+  border-radius: 8px;
+  min-height: 65px;
+  resize: vertical;
+}
+.upload-summary {
+  background: #edf5f0;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 14px;
+}
+@media (max-width: 760px) {
+  .folder-actions,
+  .selection-actions {
+    padding: 8px 14px;
+    gap: 5px;
+  }
+  .selection-actions strong {
+    width: 100%;
+  }
+  .trash-list {
+    padding: 14px;
+  }
+  .trash-list article {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

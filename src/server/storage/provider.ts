@@ -11,6 +11,8 @@ export interface StorageProvider {
   list(relative: string): Promise<StorageEntry[]>;
   exists(relative: string): Promise<boolean>;
   read(relative: string): Promise<Buffer>;
+  openRead(relative: string): Promise<import("node:stream").Readable>;
+  move(from: string, to: string): Promise<void>;
   createFolder(relative: string): Promise<void>;
   renameFolder(from: string, to: string): Promise<void>;
   saveOriginal(relative: string, bytes: Buffer): Promise<void>;

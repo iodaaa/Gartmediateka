@@ -59,7 +59,16 @@ const sourceLabels: Record<string, string> = {
 };
 const imageUrl = (asset: AssetRecord, preview = false) =>
   `/api/assets/${asset.id}${preview ? "" : "?thumbnail=1"}`;
-type Dialog = "folder" | "rename" | "upload" | "preview" | "scan" | null;
+type Dialog =
+  | "folder"
+  | "rename"
+  | "upload"
+  | "preview"
+  | "scan"
+  | "trash"
+  | "move"
+  | "project"
+  | null;
 type ScanResult = {
   folderCount: number;
   imageCount: number;
@@ -101,6 +110,35 @@ export default function RealWorkspace() {
   const [data, setData] = useState<LibraryResponse | null>(null);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selection, setSelection] = useState<Set<string>>(new Set());
+  const anchor = useRef<string | null>(null);
+  const [trashView, setTrashView] = useState(false);
+  const [trashEntries, setTrashEntries] = useState<
+    {
+      id: string;
+      name: string;
+      originalPath: string;
+      fileCount: number;
+      folderCount: number;
+      createdAt: string;
+    }[]
+  >([]);
+  const [trashPlan, setTrashPlan] = useState<{
+    name: string;
+    fileCount: number;
+    folderCount: number;
+    token: string;
+    ids?: string[];
+    folderId?: string;
+  } | null>(null);
+  const [destination, setDestination] = useState("");
+  const [templates, setTemplates] = useState<
+    { id: string; name: string; folders: string[] }[]
+  >([]);
+  const [templateId, setTemplateId] = useState("standard");
+  const [projectNumber, setProjectNumber] = useState("");
+  const [projectYear, setProjectYear] = useState(new Date().getFullYear());
+  const [projectDescription, setProjectDescription] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [query, setQuery] = useState("");
   const [search, setSearch] = useState("");
@@ -130,7 +168,20 @@ export default function RealWorkspace() {
   const currentId = folderId || data?.rootId || null;
   const current = folders.find((f) => f.id === currentId);
   const assets = data?.assets || [];
-  const selected = assets.find((a) => a.id === selectedId) || assets[0] || null;
+  const selected = trashView
+    ? null
+    : assets.find((a) => a.id === selectedId) || assets[0] || null;
+  useEffect(() => {
+    api<typeof templates>("/api/actions?action=templates")
+      .then(setTemplates)
+      .catch((e) => setError(e.message));
+  }, []);
+  useEffect(() => {
+    if (trashView)
+      api<typeof trashEntries>("/api/actions")
+        .then(setTrashEntries)
+        .catch((e) => setError(e.message));
+  }, [trashView, revision]);
   useEffect(() => {
     const timer = setTimeout(() => {
       setSearch(query);
@@ -141,7 +192,6 @@ export default function RealWorkspace() {
   useEffect(() => {
     const controller = new AbortController();
     // Loading state tracks the external network request, not derived component state.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true);
     const params = new URLSearchParams({ q: search, page: String(page), sort });
     if (folderId) params.set("folderId", folderId);
@@ -151,7 +201,14 @@ export default function RealWorkspace() {
       .then((value) => {
         if (!controller.signal.aborted) {
           setData(value);
-          setError("");
+          const parents: string[] = [];
+          let f = value.folders.find((f) => f.id === folderId);
+          while (f?.parentId) {
+            parents.push(f.parentId);
+            f = value.folders.find((p) => p.id === f!.parentId);
+          }
+          if (parents.length)
+            setExpanded((prev) => new Set([...prev, ...parents]));
         }
       })
       .catch((e) => {
@@ -175,6 +232,8 @@ export default function RealWorkspace() {
       if (e.key === "Escape") {
         setSidebarOpen(false);
         setDetailsOpen(false);
+        setSelection(new Set());
+        anchor.current = null;
       }
     };
     window.addEventListener("keydown", escape);
@@ -189,6 +248,10 @@ export default function RealWorkspace() {
     cursor = folders.find((f) => f.id === cursor!.parentId);
   }
   function navigate(id: string) {
+    setError("");
+    setTrashView(false);
+    setSelection(new Set());
+    anchor.current = null;
     setFolderId(id);
     setPage(1);
     setSelectedId(null);
@@ -207,9 +270,101 @@ export default function RealWorkspace() {
   function close() {
     if (!busy) setModal(null);
   }
-  function choose(asset: AssetRecord) {
+  function choose(
+    asset: AssetRecord,
+    event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean },
+    checkbox = false,
+  ) {
+    setSelection((prev) => {
+      const next = new Set(
+        event?.ctrlKey || event?.metaKey || checkbox ? prev : [],
+      );
+      const first = assets.findIndex((a) => a.id === anchor.current),
+        last = assets.findIndex((a) => a.id === asset.id);
+      if (event?.shiftKey && first >= 0)
+        for (const a of assets.slice(
+          Math.min(first, last),
+          Math.max(first, last) + 1,
+        ))
+          next.add(a.id);
+      else if (next.has(asset.id)) next.delete(asset.id);
+      else next.add(asset.id);
+      return next;
+    });
+    if (!event?.shiftKey) anchor.current = asset.id;
     setSelectedId(asset.id);
     setDetailsOpen(true);
+  }
+  async function action(payload: object) {
+    return api<{
+      results?: { ok: boolean; error?: string }[];
+      folderId?: string;
+    }>("/api/actions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+  }
+  async function runAction(payload: object) {
+    setBusy("Выполняем операцию…");
+    setLoading(true);
+    setError("");
+    try {
+      const result = await action(payload);
+      const failures = result.results?.filter((r) => !r.ok) || [];
+      if (failures.length)
+        throw new Error(failures.map((r) => r.error).join("; "));
+      setModal(null);
+      setSelection(new Set());
+      setRevision((r) => r + 1);
+      if (
+        result.folderId &&
+        (!trashView || (payload as { action?: string }).action === "project")
+      )
+        navigate(result.folderId);
+      setToast("Операция завершена");
+      return true;
+    } catch (e) {
+      setError((e as Error).message);
+      setRevision((r) => r + 1);
+      return false;
+    } finally {
+      setBusy("");
+    }
+  }
+  async function prepareTrash(folder = false) {
+    setBusy("Проверяем содержимое…");
+    setError("");
+    const target = folder ? { folderId: currentId! } : { ids: [...selection] };
+    try {
+      const plan = await api<NonNullable<typeof trashPlan>>("/api/actions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "trash-preview", ...target }),
+      });
+      setTrashPlan({ ...plan, ...target });
+      setModal("trash");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+  function downloadFiles(folder = false) {
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/api/download";
+    form.target = "_blank";
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "payload";
+    input.value = JSON.stringify(
+      folder ? { folderId: currentId } : { ids: [...selection] },
+    );
+    form.append(input);
+    document.body.append(form);
+    form.submit();
+    form.remove();
   }
   async function scan() {
     setBusy("Читаем структуру хранилища…");
@@ -253,8 +408,10 @@ export default function RealWorkspace() {
     }
   }
   function pick(files: File[]) {
-    if (!currentId || busy) return;
-    setUploadFiles(files);
+    if (!currentId || busy || !files.length || trashView) return;
+    setUploadFiles((prev) =>
+      modal === "upload" && !uploadResults ? [...prev, ...files] : files,
+    );
     setUploadResults(null);
     setSourceType("UNKNOWN");
     setError("");
@@ -262,25 +419,52 @@ export default function RealWorkspace() {
   }
   async function upload() {
     if (!currentId || !uploadFiles.length) return;
-    if (
-      uploadFiles.length > 20 ||
-      uploadFiles.some((f) => f.size > 50 * 1024 ** 2) ||
-      uploadFiles.reduce((n, f) => n + f.size, 0) > 100 * 1024 ** 2
-    ) {
-      setError("До 20 изображений, до 50 МБ каждое и до 100 МБ за загрузку");
-      return;
-    }
-    const body = new FormData();
-    body.set("folderId", currentId);
-    body.set("sourceType", sourceType);
-    uploadFiles.forEach((file) => body.append("files", file));
     setBusy("Сохраняем изображения и создаём превью…");
     setError("");
     try {
-      const result = await api<{ results: UploadResult[] }>("/api/ingest", {
-        method: "POST",
-        body,
-      });
+      const result: { results: UploadResult[] } = { results: [] };
+      const groups: File[][] = [];
+      let group: File[] = [],
+        bytes = 0;
+      for (const file of uploadFiles) {
+        if (file.size > 50 * 1024 ** 2) {
+          result.results.push({
+            filename: file.name,
+            status: "error",
+            message: "Файл превышает 50 МБ",
+          });
+          continue;
+        }
+        if (group.length === 20 || bytes + file.size > 99 * 1024 ** 2) {
+          groups.push(group);
+          group = [];
+          bytes = 0;
+        }
+        group.push(file);
+        bytes += file.size;
+      }
+      if (group.length) groups.push(group);
+      for (const batch of groups) {
+        const body = new FormData();
+        body.set("folderId", currentId);
+        body.set("sourceType", sourceType);
+        batch.forEach((file) => body.append("files", file));
+        try {
+          const response = await api<{ results: UploadResult[] }>(
+            "/api/ingest",
+            { method: "POST", body },
+          );
+          result.results.push(...response.results);
+        } catch (e) {
+          result.results.push(
+            ...batch.map((file) => ({
+              filename: file.name,
+              status: "error" as const,
+              message: (e as Error).message,
+            })),
+          );
+        }
+      }
       setUploadResults(result.results);
       setRevision((r) => r + 1);
       const imported = result.results.find((r) => r.status === "imported");
@@ -354,7 +538,19 @@ export default function RealWorkspace() {
     ? Math.round((used / data.capacity.total) * 100)
     : 0;
   return (
-    <div className="app-shell real-app">
+    <div
+      className="app-shell real-app"
+      onDragOverCapture={(e) => {
+        if (e.dataTransfer.types.includes("Files")) e.preventDefault();
+      }}
+      onDropCapture={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragDepth.current = 0;
+        setDragging(false);
+        pick(Array.from(e.dataTransfer.files));
+      }}
+    >
       <header className="topbar">
         <button
           className="icon-button mobile-menu"
@@ -404,8 +600,8 @@ export default function RealWorkspace() {
           </button>
           <button
             className="button primary"
-            disabled
-            title="Проекты — на следующем этапе"
+            disabled={!!busy || !data?.rootId}
+            onClick={() => open("project")}
           >
             <Plus size={19} />
             <span>Новый проект</span>
@@ -459,7 +655,6 @@ export default function RealWorkspace() {
             { label: "Избранное", icon: Star },
             { label: "Недавние", icon: Clock3 },
             { label: "Общие", icon: Share2 },
-            { label: "Корзина", icon: Trash2 },
           ].map(({ label, icon: Icon }) => (
             <button
               className="nav-item"
@@ -471,6 +666,17 @@ export default function RealWorkspace() {
               <span>{label}</span>
             </button>
           ))}
+          <button
+            className="nav-item"
+            onClick={() => {
+              setTrashView(true);
+              setSelection(new Set());
+              setSidebarOpen(false);
+            }}
+          >
+            <Trash2 size={21} />
+            <span>Корзина</span>
+          </button>
         </nav>
         <div className="folder-heading">
           <h2>Папки</h2>
@@ -627,6 +833,88 @@ export default function RealWorkspace() {
             Scan
           </button>
         </div>
+        {!trashView && currentId && (
+          <div className="folder-actions">
+            <button
+              className="button"
+              disabled={!!busy || loading}
+              onClick={async () => {
+                try {
+                  setSelection(
+                    new Set(
+                      await api<string[]>(
+                        "/api/actions?action=ids&folderId=" + currentId,
+                      ),
+                    ),
+                  );
+                } catch (e) {
+                  setError((e as Error).message);
+                }
+              }}
+            >
+              Выбрать всё
+            </button>
+            <button
+              className="button"
+              disabled={!!busy}
+              onClick={() => downloadFiles(true)}
+            >
+              Скачать папку ZIP
+            </button>
+            <button
+              className="button"
+              disabled={!!busy || !current?.parentId}
+              onClick={() => prepareTrash(true)}
+            >
+              Удалить папку
+            </button>
+          </div>
+        )}
+        {!!selection.size && !trashView && (
+          <div
+            className="selection-actions"
+            role="toolbar"
+            aria-label="Действия с выделением"
+          >
+            <strong>Выбрано: {selection.size}</strong>
+            <button
+              className="button"
+              disabled={!!busy}
+              onClick={() => downloadFiles()}
+            >
+              Скачать
+            </button>
+            <button
+              className="button"
+              disabled={!!busy}
+              onClick={() => {
+                setDestination("");
+                open("move");
+              }}
+            >
+              Переместить
+            </button>
+            <button className="button" disabled>
+              Добавить в коллекцию
+            </button>
+            <button
+              className="button"
+              disabled={!!busy}
+              onClick={() => prepareTrash()}
+            >
+              Удалить
+            </button>
+            <button
+              className="button"
+              onClick={() => {
+                setSelection(new Set());
+                anchor.current = null;
+              }}
+            >
+              Снять выделение
+            </button>
+          </div>
+        )}
         {busy && (
           <div className="status-banner" role="status">
             <LoaderCircle className="spinning" size={17} />
@@ -645,7 +933,34 @@ export default function RealWorkspace() {
           </div>
         )}
         <div className="asset-scroll" aria-busy={loading}>
-          {loading ? (
+          {trashView ? (
+            <section className="trash-list">
+              <h2>Корзина</h2>
+              <p>Окончательное удаление отключено. Оригиналы сохранены.</p>
+              {!trashEntries.length && <p>Корзина пуста</p>}
+              {trashEntries.map((entry) => (
+                <article key={entry.id}>
+                  <div>
+                    <strong>{entry.name}</strong>
+                    <p>{entry.originalPath}</p>
+                    <small>
+                      Файлов: {entry.fileCount} · Вложенных папок:{" "}
+                      {entry.folderCount} · {date(entry.createdAt)}
+                    </small>
+                  </div>
+                  <button
+                    className="button"
+                    disabled={!!busy}
+                    onClick={() =>
+                      runAction({ action: "restore", id: entry.id })
+                    }
+                  >
+                    Восстановить
+                  </button>
+                </article>
+              ))}
+            </section>
+          ) : loading ? (
             <div className="empty-state">
               <LoaderCircle className="spinning" />
               <p>Читаем каталог…</p>
@@ -664,12 +979,23 @@ export default function RealWorkspace() {
                 aria-label="Файлы"
               >
                 {assets.map((asset) => (
-                  <button
+                  <div
+                    role="button"
+                    tabIndex={0}
                     key={asset.id}
-                    className={`asset-card ${selected?.id === asset.id ? "is-selected" : ""}`}
+                    className={`asset-card ${selection.has(asset.id) ? "is-selected" : ""}`}
                     aria-label={`Выбрать ${asset.originalFilename}`}
-                    aria-pressed={selected?.id === asset.id}
-                    onClick={() => choose(asset)}
+                    aria-pressed={selection.has(asset.id)}
+                    onClick={(e) => choose(asset, e)}
+                    onKeyDown={(e) => {
+                      if (
+                        e.target === e.currentTarget &&
+                        (e.key === "Enter" || e.key === " ")
+                      ) {
+                        e.preventDefault();
+                        choose(asset, e);
+                      }
+                    }}
                     onDoubleClick={() => {
                       choose(asset);
                       open("preview");
@@ -677,11 +1003,14 @@ export default function RealWorkspace() {
                   >
                     <div className="thumbnail">
                       <FileImage asset={asset} />
-                      {selected?.id === asset.id && (
-                        <span className="selection-check">
-                          <Check size={13} />
-                        </span>
-                      )}
+                      <input
+                        className="asset-checkbox"
+                        type="checkbox"
+                        aria-label={`Выделить ${asset.originalFilename}`}
+                        checked={selection.has(asset.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={() => choose(asset, undefined, true)}
+                      />
                     </div>
                     <div className="asset-caption">
                       <span
@@ -703,7 +1032,7 @@ export default function RealWorkspace() {
                     <span className="list-size">
                       {formatSize(asset.fileSize)}
                     </span>
-                  </button>
+                  </div>
                 ))}
               </div>
               {!assets.length && (
@@ -736,7 +1065,9 @@ export default function RealWorkspace() {
         <footer className="workspace-footer">
           <span>
             {data?.total || 0} изображений ·{" "}
-            {selected ? "выбран 1 файл" : "ничего не выбрано"}
+            {selection.size
+              ? `выбрано файлов: ${selection.size}`
+              : "ничего не выбрано"}
           </span>
           <div className="pagination">
             <button
@@ -890,6 +1221,9 @@ export default function RealWorkspace() {
           className={modal === "preview" ? "modal preview-modal" : "modal"}
           aria-label="Действие с медиатекой"
           onCancel={(e) => {
+            // A file input emits its own bubbling cancel event when the native picker closes.
+            // Only the dialog's Escape event should dismiss this modal.
+            if (e.target !== e.currentTarget) return;
             if (busy) e.preventDefault();
             else close();
           }}
@@ -905,7 +1239,153 @@ export default function RealWorkspace() {
           >
             <X />
           </button>
-          {modal === "preview" && selected ? (
+          {modal === "trash" && trashPlan ? (
+            <>
+              <h2>Отправить в корзину?</h2>
+              <p>{trashPlan.name}</p>
+              <p>
+                Файлов: {trashPlan.fileCount}. Вложенных папок:{" "}
+                {trashPlan.folderCount}.
+              </p>
+              <p>
+                Объекты будут перемещены в корзину с возможностью
+                восстановления. Окончательного удаления нет.
+              </p>
+              <div className="modal-actions">
+                <button className="button" disabled={!!busy} onClick={close}>
+                  Отмена
+                </button>
+                <button
+                  className="button primary"
+                  disabled={!!busy}
+                  onClick={async () => {
+                    const ok = await runAction({
+                      action: "trash",
+                      ...trashPlan,
+                    });
+                    if (ok && trashPlan.folderId && current?.parentId)
+                      navigate(current.parentId);
+                  }}
+                >
+                  В корзину
+                </button>
+              </div>
+            </>
+          ) : modal === "move" ? (
+            <>
+              <h2>Переместить {selection.size} файлов</h2>
+              <label className="field-label">
+                Папка назначения
+                <select
+                  aria-label="Папка назначения"
+                  value={destination}
+                  onChange={(e) => setDestination(e.target.value)}
+                >
+                  <option value="">Выберите папку</option>
+                  {folders.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.storagePath || f.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p>
+                Оригиналы будут перемещены без копирования. При совпадении имени
+                операция остановится.
+              </p>
+              <button
+                className="button primary"
+                disabled={!destination || !!busy}
+                onClick={() =>
+                  runAction({
+                    action: "move",
+                    ids: [...selection],
+                    folderId: destination,
+                  })
+                }
+              >
+                Подтвердить перемещение
+              </button>
+            </>
+          ) : modal === "project" ? (
+            <>
+              <h2>Новый проект</h2>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void runAction({
+                    action: "project",
+                    projectId: projectNumber.trim(),
+                    name: name.trim(),
+                    year: projectYear,
+                    description: projectDescription,
+                    templateId,
+                  });
+                }}
+              >
+                <label className="field-label">
+                  Шаблон
+                  <select
+                    value={templateId}
+                    onChange={(e) => setTemplateId(e.target.value)}
+                  >
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field-label">
+                  Номер проекта
+                  <input
+                    required
+                    placeholder="GART-0264"
+                    pattern="GART-[0-9]{4,8}"
+                    value={projectNumber}
+                    onChange={(e) => setProjectNumber(e.target.value)}
+                  />
+                </label>
+                <label className="field-label">
+                  Название
+                  <input
+                    required
+                    value={name}
+                    maxLength={100}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </label>
+                <label className="field-label">
+                  Год
+                  <input
+                    required
+                    type="number"
+                    min={1900}
+                    max={2200}
+                    value={projectYear}
+                    onChange={(e) => setProjectYear(Number(e.target.value))}
+                  />
+                </label>
+                <label className="field-label">
+                  Описание
+                  <textarea
+                    maxLength={4000}
+                    value={projectDescription}
+                    onChange={(e) => setProjectDescription(e.target.value)}
+                  />
+                </label>
+                <p className="subtle">
+                  Будет создано{" "}
+                  {templates.find((t) => t.id === templateId)?.folders.length ||
+                    0}{" "}
+                  основных папок. Глубокие подпапки не создаются.
+                </p>
+                <button className="button primary" disabled={!!busy}>
+                  Создать проект
+                </button>
+              </form>
+            </>
+          ) : modal === "preview" && selected ? (
             <>
               <FileImage asset={selected} preview />
               <h2>{selected.originalFilename}</h2>
@@ -944,6 +1424,20 @@ export default function RealWorkspace() {
               </p>
               {uploadResults ? (
                 <>
+                  <p className="upload-summary" role="status">
+                    Загружено:{" "}
+                    {
+                      uploadResults.filter((r) => r.status === "imported")
+                        .length
+                    }{" "}
+                    · Пропущено:{" "}
+                    {
+                      uploadResults.filter((r) => r.status === "duplicate")
+                        .length
+                    }{" "}
+                    · Ошибок:{" "}
+                    {uploadResults.filter((r) => r.status === "error").length}
+                  </p>
                   <ul className="upload-results">
                     {uploadResults.map((result, index) => (
                       <li key={index} className={result.status}>
@@ -996,9 +1490,11 @@ export default function RealWorkspace() {
                     multiple
                     accept=".jpg,.jpeg,.png,.webp"
                     aria-label="Выбрать изображения"
-                    onChange={(e) =>
-                      setUploadFiles(Array.from(e.target.files || []))
-                    }
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      e.target.value = "";
+                      pick(files);
+                    }}
                   />
                   <button
                     className="upload-placeholder upload-picker"
@@ -1011,7 +1507,10 @@ export default function RealWorkspace() {
                         ? `Выбрано файлов: ${uploadFiles.length}`
                         : "Выбрать изображения"}
                     </strong>
-                    <span>JPG, JPEG, PNG, WEBP · до 50 МБ на файл</span>
+                    <span>
+                      Или перетащите файлы сюда · JPG, JPEG, PNG, WEBP · до 50
+                      МБ на файл
+                    </span>
                   </button>
                   <ul className="pending-files">
                     {uploadFiles.map((file, index) => (
