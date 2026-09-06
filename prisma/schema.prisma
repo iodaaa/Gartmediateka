@@ -40,30 +40,31 @@ model MediaSet {
 }
 
 model MediaAsset {
-  id               String       @id @default(uuid())
-  mediaId          String       @unique
+  id               String         @id @default(uuid())
+  mediaId          String         @unique
   originalFilename String
   storedFilename   String
   extension        String
   mimeType         String
   fileSize         BigInt
   checksumSha256   String
-  storagePath      String       @unique
-  pathKey          String       @unique
+  storagePath      String         @unique
+  pathKey          String         @unique
   folderId         String
-  folder           Folder       @relation(fields: [folderId], references: [id], onDelete: Restrict)
+  folder           Folder         @relation(fields: [folderId], references: [id], onDelete: Restrict)
   mediaSetId       String?
-  mediaSet         MediaSet?    @relation(fields: [mediaSetId], references: [id], onDelete: Restrict)
+  mediaSet         MediaSet?      @relation(fields: [mediaSetId], references: [id], onDelete: Restrict)
   ingestBatchId    String?
-  ingestBatch      IngestBatch? @relation(fields: [ingestBatchId], references: [id], onDelete: Restrict)
-  sourceType       String       @default("UNKNOWN")
-  fileRole         String       @default("ORIGINAL")
+  ingestBatch      IngestBatch?   @relation(fields: [ingestBatchId], references: [id], onDelete: Restrict)
+  sourceType       String         @default("UNKNOWN")
+  fileRole         String         @default("ORIGINAL")
   width            Int
   height           Int
   thumbnailPath    String
+  physicalCopies   PhysicalCopy[]
   trashId          String?
-  createdAt        DateTime     @default(now())
-  updatedAt        DateTime     @updatedAt
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
   @@index([folderId, createdAt])
   @@index([checksumSha256])
@@ -85,6 +86,23 @@ model TrashEntry {
   restoredAt       DateTime?
 
   @@index([restoredAt, createdAt])
+}
+
+model PhysicalCopy {
+  id             String     @id @default(uuid())
+  assetId        String
+  asset          MediaAsset @relation(fields: [assetId], references: [id], onDelete: Restrict)
+  folderId       String
+  storagePath    String     @unique
+  pathKey        String     @unique
+  checksumSha256 String
+  status         String     @default("PENDING")
+  trashId        String?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([assetId])
+  @@index([folderId, trashId])
 }
 
 model Project {

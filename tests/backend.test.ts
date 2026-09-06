@@ -391,7 +391,7 @@ test("single download is byte-exact; ZIP handles duplicate names and nested non-
   const zipChunks: Buffer[] = [];
   for await (const c of archive.stream) zipChunks.push(c);
   const entries = await unzip(Buffer.concat(zipChunks));
-  assert.deepEqual([...entries.keys()].sort(), ["same (1).jpg", "same.jpg"]);
+  assert.deepEqual([...entries.keys()].sort(), ["same (2).jpg", "same.jpg"]);
   const child = await service.createFolder(folder.id, "Nested");
   await fs.writeFile(
     path.join(root, child.storagePath, "readme.txt"),

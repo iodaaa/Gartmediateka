@@ -8,7 +8,12 @@ export async function POST(request: Request) {
     localRequest(request);
     const data = await readUpload(request);
     return NextResponse.json(
-      await library().ingest(data.folderId, data.files, data.sourceType),
+      await library().ingest(
+        data.folderId,
+        data.files,
+        data.sourceType,
+        data.naming,
+      ),
     );
   } catch (error) {
     return failure(error);

@@ -51,14 +51,14 @@ export function download(
           const assets = await ops.selected(selection.ids || []);
           const names = new Set<string>();
           for (const a of assets) {
-            let name = a.originalFilename,
+            let name = a.storedFilename,
               n = 1;
             while (names.has(name.toLowerCase())) {
-              const ext = path.posix.extname(a.originalFilename);
+              const ext = path.posix.extname(a.storedFilename);
               name =
-                a.originalFilename.slice(
+                a.storedFilename.slice(
                   0,
-                  a.originalFilename.length - ext.length,
+                  a.storedFilename.length - ext.length,
                 ) +
                 " (" +
                 n++ +
@@ -67,11 +67,11 @@ export function download(
             }
             names.add(name.toLowerCase());
             if (!(await ops.storage.exists(a.storagePath)))
-              throw new Error("Оригинал отсутствует: " + a.originalFilename);
+              throw new Error("Оригинал отсутствует: " + a.storedFilename);
             items.push({ path: a.storagePath, name });
           }
           if (assets.length === 1) {
-            filename = assets[0].originalFilename;
+            filename = assets[0].storedFilename;
             mimeType = assets[0].mimeType;
           }
         }

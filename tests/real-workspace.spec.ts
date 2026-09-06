@@ -344,11 +344,13 @@ test("MVP03 picker/drop both directions, selection, downloads, trash, restore, f
   await expect(cards).toHaveCount(3);
   await page.getByRole("button", { name: "Выбрать всё", exact: true }).click();
   await page.getByRole("button", { name: "Переместить", exact: true }).click();
+  await page.getByLabel("Поиск папки", { exact: true }).fill("Child");
   await page
-    .getByLabel("Папка назначения", { exact: true })
-    .selectOption({ label: "MVP03 files/Child" });
+    .locator(".picker-tree")
+    .getByRole("button", { name: "Child", exact: true })
+    .click();
   await page
-    .getByRole("button", { name: "Подтвердить перемещение", exact: true })
+    .getByRole("button", { name: "Переместить сюда", exact: true })
     .click();
   await expect(cards).toHaveCount(0);
   const folderZip = page.waitForEvent("download");

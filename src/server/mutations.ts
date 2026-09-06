@@ -2,12 +2,13 @@ import { randomUUID } from "node:crypto";
 import type { PrismaClient, Prisma } from "@prisma/client";
 import type { StorageProvider } from "./storage/provider";
 import { pathKey } from "./storage/local";
+import { recoverRenames } from "./rename";
 
 export type MovePlan = {
   kind: "relocate";
   source: string;
   target: string;
-  entityType: "Folder" | "MediaAsset";
+  entityType: "Folder" | "MediaAsset" | "PhysicalCopy";
   entityId: string;
   parentId: string;
   trashId: string | null;
@@ -43,6 +44,19 @@ export async function commitMove(
             },
           });
         }
+        for (const copy of (await tx.physicalCopy.findMany()).filter((c) =>
+          c.storagePath.startsWith(op.source + "/"),
+        )) {
+          const target = op.target + copy.storagePath.slice(op.source.length);
+          await tx.physicalCopy.update({
+            where: { id: copy.id },
+            data: {
+              storagePath: target,
+              pathKey: pathKey(target),
+              trashId: op.trashId,
+            },
+          });
+        }
         for (const folder of folders) {
           const target = op.target + folder.storagePath.slice(op.source.length);
           await tx.folder.update({
@@ -55,6 +69,17 @@ export async function commitMove(
             },
           });
         }
+      } else if (op.entityType === "PhysicalCopy") {
+        await tx.physicalCopy.update({
+          where: { id: op.entityId },
+          data: {
+            storagePath: op.target,
+            pathKey: pathKey(op.target),
+            folderId: op.parentId,
+            trashId: op.trashId,
+            status: op.trashId ? "TRASHED" : "PENDING",
+          },
+        });
       } else {
         await tx.mediaAsset.update({
           where: { id: op.entityId },
@@ -90,6 +115,7 @@ export async function recoverMutations(
   db: PrismaClient,
   storage: StorageProvider,
 ) {
+  await recoverRenames(db, storage);
   const pending = await db.auditLog.findMany({
     where: { action: "MOVE_PENDING" },
     orderBy: { createdAt: "asc" },

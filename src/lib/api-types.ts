@@ -24,6 +24,7 @@ export type AssetRecord = {
   thumbnailPath: string;
 };
 export type LibraryResponse = {
+  unindexedFiles?: { name: string; path: string; size: number }[];
   folders: FolderRecord[];
   assets: AssetRecord[];
   total: number;

@@ -202,7 +202,8 @@ export class WorkspaceOperations {
         kind: "relocate",
         source: entry.storagePath,
         target,
-        entityType: entry.entityType as "Folder" | "MediaAsset",
+        entityType: entry.entityType as
+          "Folder" | "MediaAsset" | "PhysicalCopy",
         entityId: entry.entityId,
         parentId: parent.id,
         trashId: null,
@@ -252,6 +253,40 @@ export class WorkspaceOperations {
         }
       }
       return { results };
+    });
+  }
+  async moveFolder(id: string, destinationId: string) {
+    return this.base.locked(async () => {
+      const folder = await this.activeFolder(id),
+        destination = await this.activeFolder(destinationId);
+      if (!folder.parentId) throw new Error("Корень нельзя перемещать");
+      if (
+        id === destinationId ||
+        destination.storagePath.startsWith(folder.storagePath + "/")
+      )
+        throw new Error("Нельзя переместить папку в себя или её потомка");
+      if (folder.parentId === destinationId)
+        throw new Error("Папка уже находится здесь");
+      const target = path.posix.join(destination.storagePath, folder.name);
+      await this.storage.validateFilePath(target);
+      if (
+        await this.db.folder.findUnique({ where: { pathKey: pathKey(target) } })
+      )
+        throw new Error("Конфликт имени папки");
+      for (const e of await this.walk(folder.storagePath))
+        await this.storage.validateFilePath(
+          target + e.path.slice(folder.storagePath.length),
+        );
+      await performMove(this.db, this.storage, {
+        kind: "relocate",
+        source: folder.storagePath,
+        target,
+        entityType: "Folder",
+        entityId: id,
+        parentId: destinationId,
+        trashId: null,
+      });
+      return { folderId: id };
     });
   }
   async createProject(input: {

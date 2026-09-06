@@ -15,7 +15,7 @@ export async function readUpload(request: Request) {
       fileSize: MAX_IMAGE_BYTES,
       files: 20,
       fields: 3,
-      fieldSize: 500,
+      fieldSize: 4000,
       parts: 23,
     },
   });
@@ -75,5 +75,6 @@ export async function readUpload(request: Request) {
     files,
     folderId: fields.folderId,
     sourceType: fields.sourceType || "UNKNOWN",
+    naming: fields.naming ? JSON.parse(fields.naming) : undefined,
   };
 }

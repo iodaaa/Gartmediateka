@@ -13,6 +13,8 @@ export interface StorageProvider {
   read(relative: string): Promise<Buffer>;
   openRead(relative: string): Promise<import("node:stream").Readable>;
   move(from: string, to: string): Promise<void>;
+  undoMove(from: string, to: string): Promise<void>;
+  validateFilePath(relative: string): Promise<void>;
   createFolder(relative: string): Promise<void>;
   renameFolder(from: string, to: string): Promise<void>;
   saveOriginal(relative: string, bytes: Buffer): Promise<void>;

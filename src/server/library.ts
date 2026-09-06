@@ -7,6 +7,8 @@ import type { StorageProvider } from "./storage/provider";
 import { extensions, inspectImage, checksum } from "./image";
 import type { UploadResult } from "../lib/api-types";
 import { recoverMutations } from "./mutations";
+import { uploadNames, freeFilename } from "./upload-naming";
+import { defaultNaming, type NamingOptions } from "../lib/naming";
 
 type AssetInput = Omit<Prisma.MediaAssetUncheckedCreateInput, "fileSize"> & {
   fileSize: number;
@@ -64,6 +66,15 @@ export class LibraryService {
         f.storagePath.startsWith(op.source + "/"),
     );
     const ids = descendants.map((f) => f.id);
+    for (const copy of (await tx.physicalCopy.findMany()).filter((c) =>
+      c.storagePath.startsWith(op.source + "/"),
+    )) {
+      const target = op.target + copy.storagePath.slice(op.source.length);
+      await tx.physicalCopy.update({
+        where: { id: copy.id },
+        data: { storagePath: target, pathKey: pathKey(target) },
+      });
+    }
     const assets = await tx.mediaAsset.findMany({
       where: { folderId: { in: ids }, trashId: null },
     });
@@ -180,6 +191,18 @@ export class LibraryService {
       let folderCount = 0,
         imageCount = 0,
         skipped = 0;
+      let unchanged = 0;
+      const duplicates: {
+        id: string;
+        filename: string;
+        storagePath: string;
+        status: string;
+        assetId: string;
+        mediaId: string;
+        existingPath: string;
+        folderId: string;
+        existingTrash: boolean;
+      }[] = [];
       const warnings: string[] = [];
       const warn = (text: string) => {
         skipped++;
@@ -218,23 +241,72 @@ export class LibraryService {
             continue;
           }
           if (!extensions.has(path.extname(item.name).toLowerCase())) continue;
-          if (
-            await this.db.mediaAsset.findUnique({
-              where: { pathKey: pathKey(item.path) },
-            })
-          )
-            continue;
           try {
-            const info = await inspectImage(
-              await this.storage.read(item.path),
-              item.name,
-            );
+            const bytes = await this.storage.read(item.path);
+            const indexed = await this.db.mediaAsset.findUnique({
+              where: { pathKey: pathKey(item.path) },
+            });
+            if (indexed) {
+              if (checksum(bytes) === indexed.checksumSha256) unchanged++;
+              else
+                warn(
+                  item.path +
+                    ": зарегистрированный оригинал изменился вне приложения",
+                );
+              continue;
+            }
+            const info = await inspectImage(bytes, item.name);
+            const existing = await this.db.mediaAsset.findFirst({
+              where: { checksumSha256: info.checksumSha256 },
+              orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            });
+            if (existing) {
+              const previous = await this.db.physicalCopy.findUnique({
+                where: { pathKey: pathKey(item.path) },
+              });
+              const copy = await this.db.physicalCopy.upsert({
+                where: { pathKey: pathKey(item.path) },
+                create: {
+                  assetId: existing.id,
+                  folderId: folder.id,
+                  storagePath: item.path,
+                  pathKey: pathKey(item.path),
+                  checksumSha256: info.checksumSha256,
+                },
+                update: {
+                  assetId: existing.id,
+                  folderId: folder.id,
+                  checksumSha256: info.checksumSha256,
+                  status:
+                    previous?.checksumSha256 === info.checksumSha256 &&
+                    previous.status === "KEPT"
+                      ? "KEPT"
+                      : "PENDING",
+                },
+              });
+              duplicates.push({
+                id: copy.id,
+                filename: item.name,
+                storagePath: item.path,
+                status: copy.status,
+                assetId: existing.id,
+                mediaId: existing.mediaId,
+                existingPath: existing.storagePath,
+                folderId: existing.folderId,
+                existingTrash: !!existing.trashId,
+              });
+              continue;
+            }
             const id = randomUUID();
             const thumbnailPath = id + ".webp";
             await this.storage.saveThumbnail(thumbnailPath, info.thumbnail);
             const { thumbnail: _thumbnail, ...fields } = info;
             void _thumbnail;
             await this.db.$transaction(async (tx) => {
+              await tx.physicalCopy.updateMany({
+                where: { pathKey: pathKey(item.path) },
+                data: { status: "REPLACED" },
+              });
               await tx.mediaAsset.create({
                 data: {
                   ...fields,
@@ -266,7 +338,15 @@ export class LibraryService {
         }
       };
       await visit("", this.storage.rootName, null);
-      const result = { folderCount, imageCount, skipped, warnings };
+      const result = {
+        folderCount,
+        imageCount,
+        skipped,
+        warnings,
+        unchanged,
+        duplicateCount: duplicates.length,
+        duplicates,
+      };
       await this.audit("SCAN_COMPLETED", "Storage", "root", result);
       return result;
     });
@@ -287,7 +367,14 @@ export class LibraryService {
       const where = {
         trashId: null,
         folderId: target || "__unscanned__",
-        ...(query ? { originalFilename: { contains: query } } : {}),
+        ...(query
+          ? {
+              OR: [
+                { originalFilename: { contains: query } },
+                { storedFilename: { contains: query } },
+              ],
+            }
+          : {}),
       };
       const [assets, total, indexed, capacity] = await Promise.all([
         this.db.mediaAsset.findMany({
@@ -297,13 +384,28 @@ export class LibraryService {
           orderBy:
             sort === "date"
               ? [{ createdAt: "desc" }, { id: "asc" }]
-              : [{ originalFilename: "asc" }, { id: "asc" }],
+              : [{ storedFilename: "asc" }, { id: "asc" }],
         }),
         this.db.mediaAsset.count({ where }),
         this.db.mediaAsset.count({ where: { trashId: null } }),
         this.storage.capacity(),
       ]);
+      const currentFolder = folders.find((f) => f.id === target);
+      const known = new Set(
+        (
+          await this.db.mediaAsset.findMany({
+            where: { folderId: target || "__unscanned__", trashId: null },
+            select: { pathKey: true },
+          })
+        ).map((a) => a.pathKey),
+      );
+      const unindexedFiles = currentFolder
+        ? (await this.storage.list(currentFolder.storagePath))
+            .filter((e) => e.type === "file" && !known.has(pathKey(e.path)))
+            .map((e) => ({ name: e.name, path: e.path, size: e.size }))
+        : [];
       return {
+        unindexedFiles,
         folders: folders.map(({ _count, ...folder }) => ({
           ...folder,
           fileCount: _count.assets,
@@ -406,6 +508,7 @@ export class LibraryService {
     folderId: string,
     files: { name: string; bytes: Buffer; error?: string }[],
     sourceType: string,
+    naming: NamingOptions = defaultNaming,
   ) {
     if (
       !["GART", "CLIENT", "CONTRACTOR", "AI", "EXTERNAL", "UNKNOWN"].includes(
@@ -422,16 +525,25 @@ export class LibraryService {
       const batch = await this.db.ingestBatch.create({
         data: { status: "PROCESSING", fileCount: files.length },
       });
+      const namePlan = await uploadNames(
+        this.db,
+        this.storage,
+        folderId,
+        files.map((f) => f.name),
+        sourceType,
+        naming,
+      );
       const results: UploadResult[] = [];
       await this.audit("INGEST_STARTED", "IngestBatch", batch.id, {
         folderId,
         fileCount: files.length,
       });
-      for (const file of files) {
+      for (const [index, file] of files.entries()) {
         let journalId: string | undefined;
         try {
           if (file.error) throw new Error(file.error);
-          validName(file.name);
+          if (namePlan.rows[index].error)
+            throw new Error(namePlan.rows[index].error);
           const info = await inspectImage(file.bytes, file.name);
           const duplicate = await this.db.mediaAsset.findFirst({
             where: { checksumSha256: info.checksumSha256 },
@@ -453,7 +565,12 @@ export class LibraryService {
             continue;
           }
           const id = randomUUID(),
-            storedFilename = id + "." + info.extension,
+            storedFilename = await freeFilename(
+              this.db,
+              this.storage,
+              folder.storagePath,
+              namePlan.rows[index].newName,
+            ),
             thumbnailPath = id + ".webp";
           const storagePath = folder.storagePath
             ? folder.storagePath + "/" + storedFilename

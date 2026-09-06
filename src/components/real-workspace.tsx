@@ -2,6 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import FolderPicker from "./folder-picker";
+import UploadNaming from "./upload-naming";
+import { NamingEditor, NamePreview } from "./naming-editor";
+import { defaultNaming, filenameParts, type NamingOptions } from "@/lib/naming";
 import {
   Bell,
   Search,
@@ -68,8 +72,22 @@ type Dialog =
   | "trash"
   | "move"
   | "project"
+  | "asset-rename"
   | null;
 type ScanResult = {
+  unchanged: number;
+  duplicateCount: number;
+  duplicates: {
+    id: string;
+    filename: string;
+    storagePath: string;
+    status: string;
+    assetId: string;
+    mediaId: string;
+    existingPath: string;
+    folderId: string;
+    existingTrash: boolean;
+  }[];
   folderCount: number;
   imageCount: number;
   skipped: number;
@@ -99,7 +117,7 @@ function FileImage({
     <img
       className="real-media-image"
       src={imageUrl(asset, preview)}
-      alt={asset.originalFilename}
+      alt={asset.storedFilename}
       loading={preview ? "eager" : "lazy"}
       onError={() => setFailed(true)}
     />
@@ -110,6 +128,7 @@ export default function RealWorkspace() {
   const [data, setData] = useState<LibraryResponse | null>(null);
   const [folderId, setFolderId] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [revealedAsset, setRevealedAsset] = useState<AssetRecord | null>(null);
   const [selection, setSelection] = useState<Set<string>>(new Set());
   const anchor = useRef<string | null>(null);
   const [trashView, setTrashView] = useState(false);
@@ -132,6 +151,15 @@ export default function RealWorkspace() {
     folderId?: string;
   } | null>(null);
   const [destination, setDestination] = useState("");
+  const [movingFolderId, setMovingFolderId] = useState<string | null>(null);
+  const [naming, setNaming] = useState<NamingOptions>(defaultNaming);
+  const [namingValid, setNamingValid] = useState(false);
+  const [renameOptions, setRenameOptions] =
+    useState<NamingOptions>(defaultNaming);
+  const [renamePlan, setRenamePlan] = useState<{
+    token: string;
+    rows: { id: string; oldName: string; newName: string; error?: string }[];
+  } | null>(null);
   const [templates, setTemplates] = useState<
     { id: string; name: string; folders: string[] }[]
   >([]);
@@ -168,9 +196,18 @@ export default function RealWorkspace() {
   const currentId = folderId || data?.rootId || null;
   const current = folders.find((f) => f.id === currentId);
   const assets = data?.assets || [];
+  const childFolders = folders.filter(
+    (f) =>
+      f.parentId === currentId &&
+      (!search ||
+        f.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())),
+  );
   const selected = trashView
     ? null
-    : assets.find((a) => a.id === selectedId) || assets[0] || null;
+    : assets.find((a) => a.id === selectedId) ||
+      (revealedAsset?.id === selectedId ? revealedAsset : null) ||
+      assets[0] ||
+      null;
   useEffect(() => {
     api<typeof templates>("/api/actions?action=templates")
       .then(setTemplates)
@@ -248,6 +285,7 @@ export default function RealWorkspace() {
     cursor = folders.find((f) => f.id === cursor!.parentId);
   }
   function navigate(id: string) {
+    setRevealedAsset(null);
     setError("");
     setTrashView(false);
     setSelection(new Set());
@@ -261,6 +299,10 @@ export default function RealWorkspace() {
     setSearch("");
   }
   function open(type: Dialog) {
+    if (type === "upload") {
+      setNaming(defaultNaming);
+      setNamingValid(false);
+    }
     setError("");
     setName(type === "rename" ? current?.name || "" : "");
     setUploadFiles([]);
@@ -416,9 +458,13 @@ export default function RealWorkspace() {
     setSourceType("UNKNOWN");
     setError("");
     setModal("upload");
+    if (modal !== "upload" || uploadResults) {
+      setNaming(defaultNaming);
+      setNamingValid(false);
+    }
   }
   async function upload() {
-    if (!currentId || !uploadFiles.length) return;
+    if (!currentId || !uploadFiles.length || !namingValid) return;
     setBusy("Сохраняем изображения и создаём превью…");
     setError("");
     try {
@@ -428,6 +474,11 @@ export default function RealWorkspace() {
         bytes = 0;
       for (const file of uploadFiles) {
         if (file.size > 50 * 1024 ** 2) {
+          if (group.length) {
+            groups.push(group);
+            group = [];
+            bytes = 0;
+          }
           result.results.push({
             filename: file.name,
             status: "error",
@@ -445,9 +496,14 @@ export default function RealWorkspace() {
       }
       if (group.length) groups.push(group);
       for (const batch of groups) {
+        const offset = uploadFiles.indexOf(batch[0]);
         const body = new FormData();
         body.set("folderId", currentId);
         body.set("sourceType", sourceType);
+        body.set(
+          "naming",
+          JSON.stringify({ ...naming, start: naming.start + offset }),
+        );
         batch.forEach((file) => body.append("files", file));
         try {
           const response = await api<{ results: UploadResult[] }>(
@@ -837,6 +893,17 @@ export default function RealWorkspace() {
           <div className="folder-actions">
             <button
               className="button"
+              disabled={!!busy || !current?.parentId}
+              onClick={() => {
+                setMovingFolderId(currentId);
+                setDestination("");
+                open("move");
+              }}
+            >
+              Переместить папку
+            </button>
+            <button
+              className="button"
               disabled={!!busy || loading}
               onClick={async () => {
                 try {
@@ -889,6 +956,7 @@ export default function RealWorkspace() {
               disabled={!!busy}
               onClick={() => {
                 setDestination("");
+                setMovingFolderId(null);
                 open("move");
               }}
             >
@@ -896,6 +964,27 @@ export default function RealWorkspace() {
             </button>
             <button className="button" disabled>
               Добавить в коллекцию
+            </button>
+            <button
+              className="button"
+              disabled={!!busy}
+              onClick={() => {
+                setRenamePlan(null);
+                setRenameOptions({
+                  ...defaultNaming,
+                  mode: "template",
+                  template:
+                    selection.size === 1
+                      ? filenameParts(
+                          assets.find((a) => selection.has(a.id))
+                            ?.storedFilename || "",
+                        ).stem
+                      : "{original}_{counter}",
+                });
+                open("asset-rename");
+              }}
+            >
+              Переименовать
             </button>
             <button
               className="button"
@@ -967,6 +1056,22 @@ export default function RealWorkspace() {
             </div>
           ) : (
             <>
+              {!!childFolders.length && (
+                <div className="central-folders" aria-label="Вложенные папки">
+                  {childFolders.map((f) => (
+                    <button
+                      key={f.id}
+                      className="central-folder"
+                      title={f.storagePath}
+                      onClick={() => navigate(f.id)}
+                    >
+                      <Folder size={28} />
+                      <span>{f.name}</span>
+                      <small>{f.fileCount} изображений</small>
+                    </button>
+                  ))}
+                </div>
+              )}
               {view === "list" && assets.length > 0 && (
                 <div className="list-heading">
                   <span>Название</span>
@@ -984,7 +1089,7 @@ export default function RealWorkspace() {
                     tabIndex={0}
                     key={asset.id}
                     className={`asset-card ${selection.has(asset.id) ? "is-selected" : ""}`}
-                    aria-label={`Выбрать ${asset.originalFilename}`}
+                    aria-label={`Выбрать ${asset.storedFilename}`}
                     aria-pressed={selection.has(asset.id)}
                     onClick={(e) => choose(asset, e)}
                     onKeyDown={(e) => {
@@ -1006,18 +1111,15 @@ export default function RealWorkspace() {
                       <input
                         className="asset-checkbox"
                         type="checkbox"
-                        aria-label={`Выделить ${asset.originalFilename}`}
+                        aria-label={`Выделить ${asset.storedFilename}`}
                         checked={selection.has(asset.id)}
                         onClick={(e) => e.stopPropagation()}
                         onChange={() => choose(asset, undefined, true)}
                       />
                     </div>
                     <div className="asset-caption">
-                      <span
-                        className="asset-name"
-                        title={asset.originalFilename}
-                      >
-                        {asset.originalFilename}
+                      <span className="asset-name" title={asset.storedFilename}>
+                        {asset.storedFilename}
                       </span>
                       <span className="asset-size">
                         {formatSize(asset.fileSize)}
@@ -1035,30 +1137,49 @@ export default function RealWorkspace() {
                   </div>
                 ))}
               </div>
-              {!assets.length && (
-                <div className="empty-state">
-                  <FolderOpen size={42} />
-                  <h2>
-                    {!data?.rootId
-                      ? "Подключите медиатеку"
-                      : search
-                        ? "Ничего не найдено"
-                        : "В этой папке нет изображений"}
-                  </h2>
-                  <p>
-                    {!data?.rootId
-                      ? "Scan прочитает существующую структуру GART_FILES."
-                      : "Выберите вложенную папку или загрузите JPG, PNG, WEBP."}
-                  </p>
-                  <button
-                    className="button primary"
-                    disabled={!!busy}
-                    onClick={() => (data?.rootId ? open("upload") : scan())}
-                  >
-                    {data?.rootId ? "Загрузить изображения" : "Scan хранилища"}
-                  </button>
-                </div>
+              {!!data?.unindexedFiles?.length && (
+                <section className="unindexed-files">
+                  <h3>Другие физические файлы</h3>
+                  {data.unindexedFiles.map((f) => (
+                    <p key={f.path}>
+                      <Files size={16} />
+                      {f.name} · {formatSize(f.size)}
+                    </p>
+                  ))}
+                  <small>
+                    Новые изображения и дубли проверяются через Scan. Остальные
+                    форматы показаны без предпросмотра.
+                  </small>
+                </section>
               )}
+              {!assets.length &&
+                !childFolders.length &&
+                !data?.unindexedFiles?.length && (
+                  <div className="empty-state">
+                    <FolderOpen size={42} />
+                    <h2>
+                      {!data?.rootId
+                        ? "Подключите медиатеку"
+                        : search
+                          ? "Ничего не найдено"
+                          : "В этой папке пусто"}
+                    </h2>
+                    <p>
+                      {!data?.rootId
+                        ? "Scan прочитает существующую структуру GART_FILES."
+                        : "Выберите вложенную папку или загрузите JPG, PNG, WEBP."}
+                    </p>
+                    <button
+                      className="button primary"
+                      disabled={!!busy}
+                      onClick={() => (data?.rootId ? open("upload") : scan())}
+                    >
+                      {data?.rootId
+                        ? "Загрузить изображения"
+                        : "Scan хранилища"}
+                    </button>
+                  </div>
+                )}
             </>
           )}
         </div>
@@ -1131,7 +1252,7 @@ export default function RealWorkspace() {
             >
               <FileImage key={selected.id} asset={selected} preview />
             </button>
-            <h1>{selected.originalFilename}</h1>
+            <h1>{selected.storedFilename}</h1>
             <p className="file-summary">
               {selected.extension.toUpperCase()} ·{" "}
               {formatSize(selected.fileSize)} · {selected.width} ×{" "}
@@ -1176,7 +1297,8 @@ export default function RealWorkspace() {
             </div>
             <dl className="metadata">
               {[
-                ["Название", selected.originalFilename],
+                ["Название", selected.storedFilename],
+                ["Имя при импорте", selected.originalFilename],
                 ["Тип файла", selected.mimeType],
                 ["Размер", formatSize(selected.fileSize)],
                 ["Разрешение", `${selected.width} × ${selected.height}`],
@@ -1271,24 +1393,80 @@ export default function RealWorkspace() {
                 </button>
               </div>
             </>
+          ) : modal === "asset-rename" ? (
+            <>
+              <h2>Переименовать · {selection.size} файлов</h2>
+              <NamingEditor
+                value={renameOptions}
+                onChange={(v) => {
+                  setRenameOptions(v);
+                  setRenamePlan(null);
+                }}
+              />
+              <p className="naming-help">
+                Переменные project/client берутся из проекта каждого файла; date
+                — дата импорта, source — источник, type — расширение.
+                Недоступные значения будут показаны в preview как ошибки.
+              </p>
+              <button
+                className="button"
+                disabled={!!busy}
+                onClick={async () => {
+                  setBusy("Проверяем новые имена…");
+                  setError("");
+                  try {
+                    setRenamePlan(
+                      await api("/api/actions", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          action: "rename-preview",
+                          ids: [...selection],
+                          naming: renameOptions,
+                        }),
+                      }),
+                    );
+                  } catch (e) {
+                    setError((e as Error).message);
+                  } finally {
+                    setBusy("");
+                  }
+                }}
+              >
+                Проверить имена
+              </button>
+              {renamePlan && <NamePreview rows={renamePlan.rows} />}
+              <button
+                className="button primary"
+                disabled={
+                  !!busy || !renamePlan || renamePlan.rows.some((r) => r.error)
+                }
+                onClick={() =>
+                  runAction({
+                    action: "rename-apply",
+                    ids: [...selection],
+                    naming: renameOptions,
+                    token: renamePlan?.token,
+                  })
+                }
+              >
+                Применить переименование
+              </button>
+            </>
           ) : modal === "move" ? (
             <>
-              <h2>Переместить {selection.size} файлов</h2>
-              <label className="field-label">
-                Папка назначения
-                <select
-                  aria-label="Папка назначения"
-                  value={destination}
-                  onChange={(e) => setDestination(e.target.value)}
-                >
-                  <option value="">Выберите папку</option>
-                  {folders.map((f) => (
-                    <option key={f.id} value={f.id}>
-                      {f.storagePath || f.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <h2>
+                {movingFolderId
+                  ? "Переместить папку"
+                  : `Переместить ${selection.size} файлов`}
+              </h2>
+              <FolderPicker
+                folders={folders}
+                value={destination}
+                onChange={setDestination}
+                currentFolderId={currentId || ""}
+                movingFolderId={movingFolderId}
+              />
               <p>
                 Оригиналы будут перемещены без копирования. При совпадении имени
                 операция остановится.
@@ -1298,13 +1476,14 @@ export default function RealWorkspace() {
                 disabled={!destination || !!busy}
                 onClick={() =>
                   runAction({
-                    action: "move",
+                    action: movingFolderId ? "move-folder" : "move",
+                    movingFolderId,
                     ids: [...selection],
                     folderId: destination,
                   })
                 }
               >
-                Подтвердить перемещение
+                Переместить сюда
               </button>
             </>
           ) : modal === "project" ? (
@@ -1388,7 +1567,7 @@ export default function RealWorkspace() {
           ) : modal === "preview" && selected ? (
             <>
               <FileImage asset={selected} preview />
-              <h2>{selected.originalFilename}</h2>
+              <h2>{selected.storedFilename}</h2>
               <p className="subtle">
                 {selected.width} × {selected.height} · {selected.storagePath}
               </p>
@@ -1396,6 +1575,120 @@ export default function RealWorkspace() {
           ) : modal === "scan" ? (
             <>
               <h2>Scan завершён</h2>
+              <p className="scan-summary">
+                Найдено новых файлов: {scanResult?.imageCount} · Без изменений:{" "}
+                {scanResult?.unchanged} · Точных дублей:{" "}
+                {scanResult?.duplicateCount} · Ошибок: {scanResult?.skipped}
+              </p>
+              <div className="scan-duplicates">
+                {scanResult?.duplicates.map((copy) => (
+                  <article key={copy.id}>
+                    <strong>{copy.filename}</strong>
+                    <p>Найденная копия: {copy.storagePath}</p>
+                    <p>
+                      Существующий MediaAsset: {copy.mediaId}
+                      <br />
+                      {copy.existingPath}
+                    </p>
+                    {copy.status === "KEPT" && (
+                      <p>Обе физические копии оставлены</p>
+                    )}
+                    <button
+                      className="button"
+                      onClick={async () => {
+                        if (copy.existingTrash) {
+                          setTrashView(true);
+                        } else {
+                          try {
+                            const asset = await api<AssetRecord>(
+                              "/api/actions?action=asset&id=" +
+                                encodeURIComponent(copy.assetId),
+                            );
+                            navigate(asset.folderId);
+                            setRevealedAsset(asset);
+                            setSelectedId(asset.id);
+                            setDetailsOpen(true);
+                          } catch (e) {
+                            setError((e as Error).message);
+                            return;
+                          }
+                        }
+                        close();
+                      }}
+                    >
+                      Показать существующий
+                    </button>
+                    <button
+                      className="button"
+                      disabled={!!busy || copy.status === "KEPT"}
+                      onClick={async () => {
+                        setBusy("Сохраняем решение…");
+                        try {
+                          await action({
+                            action: "duplicate-keep",
+                            id: copy.id,
+                          });
+                          setScanResult((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  duplicates: prev.duplicates.map((c) =>
+                                    c.id === copy.id
+                                      ? { ...c, status: "KEPT" }
+                                      : c,
+                                  ),
+                                }
+                              : prev,
+                          );
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setBusy("");
+                        }
+                      }}
+                    >
+                      Оставить обе физические копии
+                    </button>
+                    <button
+                      className="button"
+                      disabled={!!busy}
+                      onClick={async () => {
+                        if (
+                          !window.confirm(
+                            "Переместить только найденную копию в корзину?\n" +
+                              copy.storagePath,
+                          )
+                        )
+                          return;
+                        setBusy("Перемещаем копию в корзину…");
+                        try {
+                          await action({
+                            action: "duplicate-trash",
+                            id: copy.id,
+                          });
+                          setScanResult((prev) =>
+                            prev
+                              ? {
+                                  ...prev,
+                                  duplicates: prev.duplicates.filter(
+                                    (c) => c.id !== copy.id,
+                                  ),
+                                }
+                              : prev,
+                          );
+                          setRevision((r) => r + 1);
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setBusy("");
+                        }
+                      }}
+                    >
+                      Переместить найденную копию в корзину
+                    </button>
+                  </article>
+                ))}
+              </div>
               <p className="subtle">
                 Прочитано папок: {scanResult?.folderCount}. Добавлено
                 изображений: {scanResult?.imageCount}. Пропущено с
@@ -1534,6 +1827,21 @@ export default function RealWorkspace() {
                       ))}
                     </select>
                   </label>
+                  <fieldset className="naming-fieldset" disabled={!!busy}>
+                    {currentId && (
+                      <UploadNaming
+                        folderId={currentId}
+                        names={uploadFiles.map((f) => f.name)}
+                        sourceType={sourceType}
+                        value={naming}
+                        onChange={(v) => {
+                          setNaming(v);
+                          setNamingValid(false);
+                        }}
+                        onValid={setNamingValid}
+                      />
+                    )}
+                  </fieldset>
                   <div className="modal-actions">
                     <button
                       className="button"
@@ -1544,7 +1852,7 @@ export default function RealWorkspace() {
                     </button>
                     <button
                       className="button primary"
-                      disabled={!uploadFiles.length || !!busy}
+                      disabled={!uploadFiles.length || !namingValid || !!busy}
                       onClick={upload}
                     >
                       {busy ? "Загрузка…" : "Загрузить файлы"}

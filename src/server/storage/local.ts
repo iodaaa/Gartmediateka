@@ -153,6 +153,25 @@ export class LocalStorageProvider implements StorageProvider {
     if (!relative) throw new Error("Корневая папка уже существует");
     await fs.mkdir(await this.safe(relative)); // EEXIST is an error; never adopts an existing destination.
   }
+  async validateFilePath(relative: string) {
+    validName(path.posix.basename(relative));
+    if ((await this.safe(relative)).length > 240)
+      throw new Error("Путь превышает безопасные 240 символов");
+  }
+  async undoMove(from: string, to: string) {
+    const source = await this.safe(from),
+      target = await this.safe(to);
+    const a = await this.exists(from),
+      b = await this.exists(to);
+    if (a && b) {
+      const x = await fs.stat(source),
+        y = await fs.stat(target);
+      if (x.dev !== y.dev || x.ino !== y.ino || !x.isFile())
+        throw new Error("Rollback: оба пути заняты разными объектами");
+      await fs.unlink(target);
+    } else if (b) await this.move(to, from);
+    else if (!a) throw new Error("Rollback: исходный файл не найден");
+  }
   async openRead(relative: string) {
     const handle = await fs.open(await this.safe(relative), "r");
     try {

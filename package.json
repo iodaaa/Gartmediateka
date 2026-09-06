@@ -1,6 +1,6 @@
 {
   "name": "gart-media",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "overrides": {
     "@prisma/config": {
@@ -8,6 +8,8 @@
     }
   },
   "scripts": {
+    "test:mvp04": "tsx --test tests/mvp04.test.ts",
+    "test:ui:mvp04": "npm run build && tsx scripts/test-mvp04.ts",
     "dev": "tsx scripts/bootstrap.ts && next dev --hostname 127.0.0.1",
     "build": "prisma generate && next build",
     "start": "tsx scripts/bootstrap.ts && next start --hostname 127.0.0.1",
