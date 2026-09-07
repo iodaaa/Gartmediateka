@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import FolderPicker from "./folder-picker";
+import { useGalleryInteractions } from "./use-gallery-interactions";
+import { searchKey } from "@/lib/search";
 import UploadNaming from "./upload-naming";
 import { NamingEditor, NamePreview } from "./naming-editor";
 import { defaultNaming, filenameParts, type NamingOptions } from "@/lib/naming";
@@ -85,6 +87,9 @@ type ScanResult = {
     assetId: string;
     mediaId: string;
     existingPath: string;
+    existingFilename: string;
+    checksum: string;
+    legacy?: boolean;
     folderId: string;
     existingTrash: boolean;
   }[];
@@ -119,6 +124,7 @@ function FileImage({
       src={imageUrl(asset, preview)}
       alt={asset.storedFilename}
       loading={preview ? "eager" : "lazy"}
+      draggable={false}
       onError={() => setFailed(true)}
     />
   );
@@ -199,8 +205,7 @@ export default function RealWorkspace() {
   const childFolders = folders.filter(
     (f) =>
       f.parentId === currentId &&
-      (!search ||
-        f.name.toLocaleLowerCase().includes(search.toLocaleLowerCase())),
+      (!search || searchKey(f.name).includes(searchKey(search))),
   );
   const selected = trashView
     ? null
@@ -208,6 +213,17 @@ export default function RealWorkspace() {
       (revealedAsset?.id === selectedId ? revealedAsset : null) ||
       assets[0] ||
       null;
+  const interactions = useGalleryInteractions(
+    selection,
+    setSelection,
+    currentId,
+    !!busy || !!modal || loading || trashView,
+    (ids, folderId) => runAction({ action: "move", ids, folderId }),
+  );
+  const hasContents = (f: FolderRecord) =>
+    !!f.hasContents ||
+    f.fileCount > 0 ||
+    folders.some((child) => child.parentId === f.id);
   useEffect(() => {
     api<typeof templates>("/api/actions?action=templates")
       .then(setTemplates)
@@ -544,7 +560,8 @@ export default function RealWorkspace() {
         return (
           <div key={item.id}>
             <div
-              className={`real-tree-row ${currentId === item.id ? "active" : ""}`}
+              className={`real-tree-row ${currentId === item.id ? "active" : ""} ${interactions.target === item.id ? "valid-drop-target" : ""}`}
+              {...interactions.folderHandlers(item.id)}
               style={{ paddingLeft: Math.min(depth, 8) * 15 + 7 }}
             >
               <button
@@ -579,6 +596,8 @@ export default function RealWorkspace() {
               >
                 <Folder
                   size={19}
+                  data-folder-state={hasContents(item) ? "filled" : "empty"}
+                  style={{ fill: hasContents(item) ? "currentColor" : "none" }}
                   className={depth === 1 ? "gold-folder" : ""}
                 />
                 <span>{item.name}</span>
@@ -597,13 +616,24 @@ export default function RealWorkspace() {
     <div
       className="app-shell real-app"
       onDragOverCapture={(e) => {
+        if (interactions.isInternal(e.dataTransfer)) return;
         if (e.dataTransfer.types.includes("Files")) e.preventDefault();
       }}
-      onDropCapture={(e) => {
+      onDragOver={(e) => {
+        if (interactions.isInternal(e.dataTransfer)) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "none";
+        }
+      }}
+      onDrop={(e) => {
         e.preventDefault();
         e.stopPropagation();
         dragDepth.current = 0;
         setDragging(false);
+        if (interactions.isInternal(e.dataTransfer)) {
+          interactions.endDrag();
+          return;
+        }
         pick(Array.from(e.dataTransfer.files));
       }}
     >
@@ -789,6 +819,7 @@ export default function RealWorkspace() {
       <main
         className={`workspace ${dragging ? "drop-active" : ""}`}
         onDragEnter={(e) => {
+          if (interactions.isInternal(e.dataTransfer)) return;
           e.preventDefault();
           if (e.dataTransfer.types.includes("Files")) {
             dragDepth.current++;
@@ -796,16 +827,11 @@ export default function RealWorkspace() {
           }
         }}
         onDragLeave={(e) => {
+          if (interactions.isInternal(e.dataTransfer)) return;
           e.preventDefault();
           if (--dragDepth.current <= 0) setDragging(false);
         }}
         onDragOver={(e) => e.preventDefault()}
-        onDrop={(e) => {
-          e.preventDefault();
-          dragDepth.current = 0;
-          setDragging(false);
-          pick(Array.from(e.dataTransfer.files));
-        }}
       >
         <div className="workspace-toolbar">
           <nav
@@ -937,9 +963,9 @@ export default function RealWorkspace() {
             </button>
           </div>
         )}
-        {!!selection.size && !trashView && (
+        {!trashView && (
           <div
-            className="selection-actions"
+            className={`selection-actions ${selection.size ? "" : "no-selection"}`}
             role="toolbar"
             aria-label="Действия с выделением"
           >
@@ -1021,7 +1047,34 @@ export default function RealWorkspace() {
             </button>
           </div>
         )}
-        <div className="asset-scroll" aria-busy={loading}>
+        <span
+          ref={interactions.badge}
+          className="internal-drag-badge"
+          aria-hidden="true"
+        >
+          Перемещение файлов
+        </span>
+        {interactions.dragCount > 0 && (
+          <div className="internal-drag-status" role="status">
+            Перемещение файлов: {interactions.dragCount}
+          </div>
+        )}
+        <div
+          className="asset-scroll"
+          aria-busy={loading}
+          ref={interactions.area}
+          onPointerDown={interactions.pointerDown}
+          onPointerMove={interactions.pointerMove}
+          onPointerUp={interactions.pointerUp}
+          onPointerCancel={interactions.pointerUp}
+        >
+          {interactions.box && (
+            <div
+              className="selection-marquee"
+              style={interactions.box}
+              aria-hidden="true"
+            />
+          )}
           {trashView ? (
             <section className="trash-list">
               <h2>Корзина</h2>
@@ -1061,11 +1114,18 @@ export default function RealWorkspace() {
                   {childFolders.map((f) => (
                     <button
                       key={f.id}
-                      className="central-folder"
+                      className={`central-folder ${interactions.target === f.id ? "valid-drop-target" : ""}`}
+                      {...interactions.folderHandlers(f.id)}
                       title={f.storagePath}
                       onClick={() => navigate(f.id)}
                     >
-                      <Folder size={28} />
+                      <Folder
+                        size={28}
+                        data-folder-state={hasContents(f) ? "filled" : "empty"}
+                        style={{
+                          fill: hasContents(f) ? "currentColor" : "none",
+                        }}
+                      />
                       <span>{f.name}</span>
                       <small>{f.fileCount} изображений</small>
                     </button>
@@ -1088,6 +1148,10 @@ export default function RealWorkspace() {
                     role="button"
                     tabIndex={0}
                     key={asset.id}
+                    data-asset-id={asset.id}
+                    draggable={!busy && !modal}
+                    onDragStart={(e) => interactions.startDrag(e, asset.id)}
+                    onDragEnd={interactions.endDrag}
                     className={`asset-card ${selection.has(asset.id) ? "is-selected" : ""}`}
                     aria-label={`Выбрать ${asset.storedFilename}`}
                     aria-pressed={selection.has(asset.id)}
@@ -1590,6 +1654,17 @@ export default function RealWorkspace() {
                       <br />
                       {copy.existingPath}
                     </p>
+                    <p>
+                      Существующий файл: {copy.existingFilename}
+                      <br />
+                      SHA-256: {copy.checksum}
+                    </p>
+                    {copy.legacy && (
+                      <p>
+                        Оба пути уже зарегистрированы. Записи не объединены
+                        автоматически.
+                      </p>
+                    )}
                     {copy.status === "KEPT" && (
                       <p>Обе физические копии оставлены</p>
                     )}

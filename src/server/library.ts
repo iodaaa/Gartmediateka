@@ -9,6 +9,8 @@ import type { UploadResult } from "../lib/api-types";
 import { recoverMutations } from "./mutations";
 import { uploadNames, freeFilename } from "./upload-naming";
 import { defaultNaming, type NamingOptions } from "../lib/naming";
+import { searchKey } from "../lib/search";
+import { scanDuplicate } from "./scan-duplicate";
 
 type AssetInput = Omit<Prisma.MediaAssetUncheckedCreateInput, "fileSize"> & {
   fileSize: number;
@@ -192,17 +194,9 @@ export class LibraryService {
         imageCount = 0,
         skipped = 0;
       let unchanged = 0;
-      const duplicates: {
-        id: string;
-        filename: string;
-        storagePath: string;
-        status: string;
-        assetId: string;
-        mediaId: string;
-        existingPath: string;
-        folderId: string;
-        existingTrash: boolean;
-      }[] = [];
+      const duplicates: NonNullable<
+        Awaited<ReturnType<typeof scanDuplicate>>
+      >[] = [];
       const warnings: string[] = [];
       const warn = (text: string) => {
         skipped++;
@@ -246,57 +240,31 @@ export class LibraryService {
             const indexed = await this.db.mediaAsset.findUnique({
               where: { pathKey: pathKey(item.path) },
             });
+            const hash = checksum(bytes);
+            if (indexed && hash !== indexed.checksumSha256) {
+              warn(
+                item.path +
+                  ": зарегистрированный оригинал изменился вне приложения",
+              );
+              continue;
+            }
+            // Hash first: names and even mismatched extensions cannot hide exact copies.
+            const duplicate = await scanDuplicate(
+              this,
+              folder.id,
+              item,
+              hash,
+              indexed,
+            );
+            if (duplicate) {
+              duplicates.push(duplicate);
+              continue;
+            }
             if (indexed) {
-              if (checksum(bytes) === indexed.checksumSha256) unchanged++;
-              else
-                warn(
-                  item.path +
-                    ": зарегистрированный оригинал изменился вне приложения",
-                );
+              unchanged++;
               continue;
             }
             const info = await inspectImage(bytes, item.name);
-            const existing = await this.db.mediaAsset.findFirst({
-              where: { checksumSha256: info.checksumSha256 },
-              orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-            });
-            if (existing) {
-              const previous = await this.db.physicalCopy.findUnique({
-                where: { pathKey: pathKey(item.path) },
-              });
-              const copy = await this.db.physicalCopy.upsert({
-                where: { pathKey: pathKey(item.path) },
-                create: {
-                  assetId: existing.id,
-                  folderId: folder.id,
-                  storagePath: item.path,
-                  pathKey: pathKey(item.path),
-                  checksumSha256: info.checksumSha256,
-                },
-                update: {
-                  assetId: existing.id,
-                  folderId: folder.id,
-                  checksumSha256: info.checksumSha256,
-                  status:
-                    previous?.checksumSha256 === info.checksumSha256 &&
-                    previous.status === "KEPT"
-                      ? "KEPT"
-                      : "PENDING",
-                },
-              });
-              duplicates.push({
-                id: copy.id,
-                filename: item.name,
-                storagePath: item.path,
-                status: copy.status,
-                assetId: existing.id,
-                mediaId: existing.mediaId,
-                existingPath: existing.storagePath,
-                folderId: existing.folderId,
-                existingTrash: !!existing.trashId,
-              });
-              continue;
-            }
             const id = randomUUID();
             const thumbnailPath = id + ".webp";
             await this.storage.saveThumbnail(thumbnailPath, info.thumbnail);
@@ -364,15 +332,35 @@ export class LibraryService {
       const target = folderId || root?.id;
       if (target && !folders.some((f) => f.id === target))
         throw new Error("Папка не найдена");
+      const names = await this.db.mediaAsset.findMany({
+        where: { folderId: target || "__unscanned__", trashId: null },
+        select: {
+          id: true,
+          pathKey: true,
+          storedFilename: true,
+          originalFilename: true,
+        },
+        orderBy:
+          sort === "date"
+            ? [{ createdAt: "desc" }, { id: "asc" }]
+            : [{ storedFilename: "asc" }, { id: "asc" }],
+      });
+      const needle = searchKey(query);
+      const matches = needle
+        ? names.filter(
+            (a) =>
+              searchKey(a.storedFilename).includes(needle) ||
+              searchKey(a.originalFilename).includes(needle),
+          )
+        : null;
       const where = {
         trashId: null,
         folderId: target || "__unscanned__",
-        ...(query
+        ...(matches
           ? {
-              OR: [
-                { originalFilename: { contains: query } },
-                { storedFilename: { contains: query } },
-              ],
+              id: {
+                in: matches.slice((page - 1) * 60, page * 60).map((a) => a.id),
+              },
             }
           : {}),
       };
@@ -380,33 +368,52 @@ export class LibraryService {
         this.db.mediaAsset.findMany({
           where,
           take: 60,
-          skip: (page - 1) * 60,
+          skip: matches ? 0 : (page - 1) * 60,
           orderBy:
             sort === "date"
               ? [{ createdAt: "desc" }, { id: "asc" }]
               : [{ storedFilename: "asc" }, { id: "asc" }],
         }),
-        this.db.mediaAsset.count({ where }),
+        Promise.resolve(matches ? matches.length : names.length),
         this.db.mediaAsset.count({ where: { trashId: null } }),
         this.storage.capacity(),
       ]);
       const currentFolder = folders.find((f) => f.id === target);
-      const known = new Set(
-        (
-          await this.db.mediaAsset.findMany({
-            where: { folderId: target || "__unscanned__", trashId: null },
-            select: { pathKey: true },
-          })
-        ).map((a) => a.pathKey),
-      );
+      const known = new Set(names.map((a) => a.pathKey));
       const unindexedFiles = currentFolder
         ? (await this.storage.list(currentFolder.storagePath))
             .filter((e) => e.type === "file" && !known.has(pathKey(e.path)))
             .map((e) => ({ name: e.name, path: e.path, size: e.size }))
         : [];
+      const parents = new Set(folders.map((f) => f.parentId));
+      const copyFolders = new Set(
+        (
+          await this.db.physicalCopy.findMany({
+            where: { trashId: null, status: { in: ["PENDING", "KEPT"] } },
+            select: { folderId: true },
+            distinct: ["folderId"],
+          })
+        ).map((c) => c.folderId),
+      );
+      const folderStates = [];
+      // Reuse known database contents; only unknown leaves need one bounded directory read.
+      for (const folder of folders) {
+        let hasContents =
+          folder._count.assets > 0 ||
+          parents.has(folder.id) ||
+          copyFolders.has(folder.id);
+        if (!hasContents) {
+          try {
+            hasContents = await this.storage.hasEntries(folder.storagePath);
+          } catch {
+            /* Missing paths are handled by the existing file operations. */
+          }
+        }
+        folderStates.push({ ...folder, hasContents });
+      }
       return {
         unindexedFiles,
-        folders: folders.map(({ _count, ...folder }) => ({
+        folders: folderStates.map(({ _count, ...folder }) => ({
           ...folder,
           fileCount: _count.assets,
         })),

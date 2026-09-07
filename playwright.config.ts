@@ -6,9 +6,11 @@ if (!process.env.GART_E2E_ROOT)
 export default defineConfig({
   testDir: "./tests",
   testMatch:
-    process.env.GART_FOCUSED === "mvp04"
-      ? "**/mvp04.spec.ts"
-      : "**/real-workspace.spec.ts",
+    process.env.GART_FOCUSED === "mvp05"
+      ? "**/mvp05.spec.ts"
+      : process.env.GART_FOCUSED === "mvp04"
+        ? "**/mvp04.spec.ts"
+        : "**/real-workspace.spec.ts",
   timeout: 60000,
   fullyParallel: false,
   workers: 1,

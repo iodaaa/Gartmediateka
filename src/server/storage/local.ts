@@ -93,6 +93,17 @@ export class LocalStorageProvider implements StorageProvider {
     }
   }
   async list(relative: string): Promise<StorageEntry[]> {
+    return this.listEntries(relative);
+  }
+  async hasEntries(relative: string) {
+    const dir = await fs.opendir(await this.safe(relative));
+    try {
+      return (await dir.read()) !== null;
+    } finally {
+      await dir.close();
+    }
+  }
+  private async listEntries(relative: string): Promise<StorageEntry[]> {
     const absolute = await this.safe(relative);
     const result: StorageEntry[] = [];
     for (const entry of await fs.readdir(absolute, { withFileTypes: true })) {

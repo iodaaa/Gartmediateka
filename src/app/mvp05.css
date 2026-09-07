@@ -1,0 +1,39 @@
+.selection-actions.no-selection {
+  visibility: hidden;
+}
+.selection-marquee {
+  position: fixed;
+  z-index: 40;
+  pointer-events: none;
+  border: 1px solid #247650;
+  background: #32895b26;
+}
+.asset-scroll {
+  user-select: none;
+}
+.valid-drop-target {
+  outline: 2px solid #248154;
+  outline-offset: -2px;
+  background: #dcefe2 !important;
+}
+.internal-drag-badge {
+  position: fixed;
+  top: -100px;
+  left: 0;
+  padding: 9px 14px;
+  background: #216b4d;
+  color: white;
+  border-radius: 7px;
+  pointer-events: none;
+}
+.internal-drag-status {
+  position: fixed;
+  bottom: 26px;
+  left: 50%;
+  z-index: 80;
+  background: #216b4d;
+  color: white;
+  padding: 9px 16px;
+  border-radius: 8px;
+  pointer-events: none;
+}

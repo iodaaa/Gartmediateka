@@ -4,6 +4,7 @@ export type FolderRecord = {
   parentId: string | null;
   storagePath: string;
   fileCount: number;
+  hasContents?: boolean;
 };
 export type AssetRecord = {
   id: string;

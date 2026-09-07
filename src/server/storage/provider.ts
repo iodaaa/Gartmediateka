@@ -9,6 +9,7 @@ export interface StorageProvider {
   readonly rootName: string;
   initialize(): Promise<void>;
   list(relative: string): Promise<StorageEntry[]>;
+  hasEntries(relative: string): Promise<boolean>;
   exists(relative: string): Promise<boolean>;
   read(relative: string): Promise<Buffer>;
   openRead(relative: string): Promise<import("node:stream").Readable>;
